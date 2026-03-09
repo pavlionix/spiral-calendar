@@ -1,0 +1,40 @@
+.zoom-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 8px 4px;
+}
+
+.breadcrumb-sep {
+  color: #aaa;
+  font-size: 14px;
+  padding: 0 2px;
+}
+
+.breadcrumb-btn {
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #6366f1;
+  cursor: pointer;
+  transition: background 0.12s;
+  font-family: inherit;
+}
+
+.breadcrumb-btn:hover:not(:disabled) {
+  background: #ede9fe;
+}
+
+.breadcrumb-btn--current {
+  color: #333;
+  font-weight: 600;
+  cursor: default;
+}
+
+.breadcrumb-btn:disabled {
+  cursor: default;
+}

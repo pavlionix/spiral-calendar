@@ -1,0 +1,220 @@
+.ef-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.ef-modal {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.18);
+  width: 100%;
+  max-width: 440px;
+  overflow: hidden;
+  animation: ef-pop 0.18s ease-out;
+}
+
+@keyframes ef-pop {
+  from { opacity: 0; transform: scale(0.94) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);   }
+}
+
+.ef-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.ef-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.ef-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  line-height: 1;
+  transition: color 0.1s, background 0.1s;
+}
+.ef-close:hover { color: #374151; background: #f3f4f6; }
+
+.ef-form {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Type toggle */
+.ef-type-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ef-type-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.12s;
+  font-family: inherit;
+}
+.ef-type-btn:hover { border-color: #a5b4fc; color: #4f46e5; }
+.ef-type-btn--active {
+  border-color: #6366f1;
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+/* Labels & inputs */
+.ef-label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 1;
+}
+
+.ef-input {
+  padding: 8px 10px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #111827;
+  background: white;
+  transition: border-color 0.12s;
+  width: 100%;
+}
+.ef-input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+.ef-row {
+  display: flex;
+  gap: 12px;
+}
+
+/* Reminder */
+.ef-reminder-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ef-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+}
+.ef-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+
+.ef-select {
+  padding: 6px 10px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 7px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #374151;
+  background: white;
+  cursor: pointer;
+}
+.ef-select:focus { outline: none; border-color: #6366f1; }
+
+/* Color picker */
+.ef-color-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ef-color-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.ef-colors {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.ef-color-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid transparent;
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.1s;
+  padding: 0;
+}
+.ef-color-dot:hover { transform: scale(1.2); }
+.ef-color-dot--active { border-color: #111827; transform: scale(1.15); }
+
+/* Actions */
+.ef-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.ef-btn {
+  padding: 9px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.12s;
+  font-family: inherit;
+}
+.ef-btn--cancel {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+.ef-btn--cancel:hover { background: #e5e7eb; color: #374151; }
+.ef-btn--save {
+  background: #6366f1;
+  color: white;
+}
+.ef-btn--save:hover { background: #4f46e5; }

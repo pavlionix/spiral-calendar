@@ -1,0 +1,38 @@
+:root {
+  font-family: system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #213547;
+  background-color: #f5f5f7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* Zoom transition animations */
+.zoom-transition {
+  transform-origin: 400px 400px;
+  transition: opacity 175ms ease-in-out, transform 175ms ease-in-out;
+}
+
+.zoom-transition--entering {
+  opacity: 0;
+  transform: scale(0.85);
+}
+
+.zoom-transition--active {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.zoom-transition--exiting {
+  opacity: 0;
+  transform: scale(1.1);
+}
