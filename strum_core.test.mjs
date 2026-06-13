@@ -1,0 +1,181 @@
+// Tests for strum_core.js — pure, browser-free strum-detection logic.
+// Run: node --test
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import * as core from './strum_core.js';
+import {
+  meanStd, palmCenter, dominantAxisDelta, classifyDir,
+  spectralFlux, audioOnsetDecision, vibScale, vibGlow,
+  estimateBPM, HandTracker,
+} from './strum_core.js';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+const approx = (a, b, eps = 1e-9) =>
+  assert.ok(Math.abs(a - b) <= eps, `${a} !~= ${b}`);
+
+// ── meanStd ────────────────────────────────────────────────────────────
+test('meanStd: population mean and std', () => {
+  const { mean, std } = meanStd([2, 4, 4, 4, 5, 5, 7, 9]);
+  approx(mean, 5);
+  approx(std, 2);
+});
+test('meanStd: empty array is safe', () => {
+  const { mean, std } = meanStd([]);
+  approx(mean, 0);
+  approx(std, 1); // fallback std so thresholds stay finite
+});
+
+// ── palmCenter ─────────────────────────────────────────────────────────
+test('palmCenter: averages the five palm landmarks', () => {
+  const lm = Array.from({ length: 21 }, (_, i) => ({ x: i, y: i * 2 }));
+  const c = palmCenter(lm);
+  approx(c.x, (0 + 5 + 9 + 13 + 17) / 5); // 8.8
+  approx(c.y, 17.6);
+});
+
+// ── dominantAxisDelta ──────────────────────────────────────────────────
+test('dominantAxisDelta: picks the larger-magnitude axis (vertical)', () => {
+  approx(dominantAxisDelta({ x: 0, y: 0 }, { x: 0.1, y: 0.3 }), 0.3);
+});
+test('dominantAxisDelta: picks horizontal when it dominates, keeps sign', () => {
+  approx(dominantAxisDelta({ x: 0, y: 0 }, { x: -0.4, y: 0.2 }), -0.4);
+});
+
+// ── classifyDir ────────────────────────────────────────────────────────
+test('classifyDir: non-negative is down, negative is up', () => {
+  assert.equal(classifyDir(0.3), 'down');
+  assert.equal(classifyDir(0), 'down');
+  assert.equal(classifyDir(-0.01), 'up');
+});
+
+// ── spectralFlux ───────────────────────────────────────────────────────
+test('spectralFlux: sums only positive bin increases', () => {
+  const { flux, nextPrev } = spectralFlux(
+    [-90, -60, -25], [-100, -50, -30]);
+  approx(flux, 15); // +10 (bin0) + +5 (bin2); bin1 dropped
+  assert.deepEqual(Array.from(nextPrev), [-90, -60, -25]);
+});
+test('spectralFlux: treats -Infinity / NaN as floor (-140)', () => {
+  const { flux } = spectralFlux([-Infinity, NaN], [-Infinity, -140]);
+  approx(flux, 0);
+});
+
+// ── audioOnsetDecision ─────────────────────────────────────────────────
+test('audioOnsetDecision: fires on a clear spike past threshold', () => {
+  const hist = [2, 3, 2, 3, 2, 3];
+  const ok = audioOnsetDecision({
+    flux: 40, histVals: hist, k: 2.6, minFlux: 3,
+    dtSinceLast: 0.5, refractory: 0.1,
+  });
+  assert.equal(ok, true);
+});
+test('audioOnsetDecision: suppressed inside refractory window', () => {
+  const hist = [2, 3, 2, 3, 2, 3];
+  const ok = audioOnsetDecision({
+    flux: 40, histVals: hist, k: 2.6, minFlux: 3,
+    dtSinceLast: 0.05, refractory: 0.1,
+  });
+  assert.equal(ok, false);
+});
+test('audioOnsetDecision: suppressed below absolute minFlux', () => {
+  const ok = audioOnsetDecision({
+    flux: 2, histVals: [0, 0, 0], k: 2.6, minFlux: 3,
+    dtSinceLast: 1, refractory: 0.1,
+  });
+  assert.equal(ok, false);
+});
+
+// ── vibration envelopes ────────────────────────────────────────────────
+test('vibScale: peaks (~1.95) at impact, returns to 1 after decay', () => {
+  approx(vibScale(0), 1.95, 1e-6);
+  assert.equal(vibScale(0.8), 1);
+  assert.ok(vibScale(0.05) > 1 && vibScale(0.05) < 1.95);
+});
+test('vibGlow: 1 at impact, 0 after decay', () => {
+  approx(vibGlow(0), 1, 1e-6);
+  assert.equal(vibGlow(0.7), 0);
+});
+
+// ── estimateBPM ────────────────────────────────────────────────────────
+test('estimateBPM: 0.5 s spacing => 120 BPM', () => {
+  assert.equal(estimateBPM([0, 0.5, 1.0, 1.5, 2.0]), 120);
+});
+test('estimateBPM: needs >=3 downstrokes else null', () => {
+  assert.equal(estimateBPM([0, 0.5]), null);
+});
+test('estimateBPM: ignores implausible gaps (<0.15 or >2 s)', () => {
+  // gaps: 0.5, 0.02(drop), 0.48 -> median ~0.5 -> 120
+  assert.equal(estimateBPM([0, 0.5, 0.52, 1.0]), 120);
+});
+
+// ── HandTracker: the strumming-hand selector ───────────────────────────
+test('HandTracker: picks the oscillating (strumming) hand over a still one', () => {
+  const tr = new HandTracker();
+  const STILL = { x: 0.80, y: 0.50 };        // fretting hand, fixed
+  let chosen = null;
+  for (let f = 0; f < 12; f++) {
+    const moving = { x: 0.30, y: 0.50 + (f % 2 ? 0.12 : -0.12) }; // strums
+    chosen = tr.update([STILL, moving]).chosen; // index 0 = still, 1 = moving
+  }
+  assert.ok(chosen, 'a hand should be chosen');
+  assert.equal(chosen.index, 1, 'the moving hand (index 1) must win');
+  assert.ok(chosen.speed > 0, 'chosen hand reports motion');
+});
+
+test('HandTracker: chosen velEMA tracks the strumming hand sign', () => {
+  const tr = new HandTracker();
+  const STILL = { x: 0.80, y: 0.50 };
+  let res;
+  // drive the moving hand downward (increasing y) for several frames
+  for (let f = 0; f < 6; f++) {
+    res = tr.update([STILL, { x: 0.30, y: 0.40 + f * 0.06 }]);
+  }
+  assert.equal(res.chosen.index, 1);
+  assert.equal(classifyDir(res.chosen.velEMA), 'down');
+});
+
+test('HandTracker: hysteresis prevents flicker on a single spike', () => {
+  const tr = new HandTracker();
+  // hand A oscillates strongly for a while -> becomes chosen
+  let res;
+  for (let f = 0; f < 12; f++) {
+    const A = { x: 0.30, y: 0.50 + (f % 2 ? 0.12 : -0.12) };
+    const B = { x: 0.80, y: 0.50 };
+    res = tr.update([A, B]);
+  }
+  assert.equal(res.chosen.index, 0, 'A is the established strumming hand');
+  // one frame where B jumps once — should NOT immediately steal selection
+  res = tr.update([{ x: 0.30, y: 0.50 }, { x: 0.80, y: 0.66 }]);
+  assert.equal(res.chosen.index, 0, 'single spike must not switch hands');
+});
+
+test('HandTracker: handles a single hand', () => {
+  const tr = new HandTracker();
+  const res = tr.update([{ x: 0.5, y: 0.5 }]);
+  assert.equal(res.chosen.index, 0);
+});
+
+test('HandTracker: no hands => chosen is null', () => {
+  const tr = new HandTracker();
+  const res = tr.update([]);
+  assert.equal(res.chosen, null);
+});
+
+// ── wiring guard: strum_live.html stays in sync with the module ────────
+test('strum_live.html imports only symbols that strum_core exports', () => {
+  const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
+  const m = html.match(/import\s*\{([^}]+)\}\s*from\s*["']\.\/strum_core\.js["']/);
+  assert.ok(m, 'HTML must import from ./strum_core.js');
+  const names = m[1].split(',').map(s => s.trim()).filter(Boolean);
+  const missing = names.filter(n => !(n in core));
+  assert.deepEqual(missing, [], `HTML imports missing from core: ${missing}`);
+});
+
+test('strum_live.html requests two hands from MediaPipe', () => {
+  const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
+  assert.match(html, /numHands:\s*2/, 'must detect 2 hands to pick the strummer');
+});

@@ -11,8 +11,13 @@ runs MediaPipe Hands + the Web Audio API entirely in your browser, so it is fast
 and plays the audio.
 
 **What it does**
-- Tracks the **21 hand landmarks** on the strumming hand and draws them on the
-  video (just like the MediaPipe demo).
+- Detects **both hands** and automatically picks the **strumming hand** by
+  motion: the fretting hand barely moves between beats, while the strumming hand
+  sweeps far and fast, so it wins a per-hand motion score (with hysteresis to
+  avoid flicker). The chosen hand is drawn bright (green ↓ / purple ↑); the other
+  is dimmed grey.
+- Tracks the **21 hand landmarks** and draws them on the video (just like the
+  MediaPipe demo).
 - Detects strums from the **audio onsets** (the actual moment a chord is struck),
   then classifies each as ↓ or ↑ from the hand's motion direction at that instant —
   i.e. it pairs *sound* with *motion* to tell which stroke produced the note.
@@ -35,6 +40,20 @@ Then: choose a video file → **Play**. First load downloads the MediaPipe model
   `Motion only` (for silent clips / webcam).
 - **Sens**: how readily strums are detected (raise it if it misses strokes).
 - **Webcam**: analyze your own playing live.
+
+**Architecture** — the browser-free detection logic (hand selection, spectral
+flux, onset thresholds, BPM, vibration envelopes) lives in `strum_core.js` and is
+imported by `strum_live.html`. Keeping it separate from the DOM/canvas/MediaPipe
+code is what makes it unit-testable.
+
+**Tests** — `strum_core.test.mjs` covers the core with Node's built-in runner (no
+dependencies):
+```bash
+node --test          # runs *.test.mjs in the folder
+```
+Two of the tests also parse `strum_live.html`'s inline module to confirm every
+symbol it imports actually exists in `strum_core.js`, so wiring breaks are caught
+without a browser.
 
 > The Python tools below (`strum_analyzer.py` CLI and `strum_ui.py` server) are the
 > original offline/batch engine. They still work but are slower because they process

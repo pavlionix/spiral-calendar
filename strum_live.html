@@ -92,6 +92,11 @@ video{display:none}
 import {
   HandLandmarker, FilesetResolver, DrawingUtils
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
+import {
+  palmCenter, classifyDir, spectralFlux,
+  audioOnsetDecision, sensToK, sensToMinMag, vibScale, vibGlow,
+  estimateBPM, meanStd, HandTracker,
+} from "./strum_core.js";
 
 const $ = id => document.getElementById(id);
 const vid = $('vid');
@@ -103,29 +108,35 @@ const CLR_DOWN = '#00FF88';
 const CLR_UP   = '#CC44FF';
 const RGB_DOWN = '0,255,136';
 const RGB_UP   = '204,68,255';
+const CLR_DIM  = '#7a7a7a';
 
 // state
 let handLandmarker = null, drawer = null;
 let running = false, lastVideoTime = -1, isPaused = false;
 
-let prevCenter = null, velEMA = 0;
-const VEL_ALPHA = 0.55;
+// strumming-hand selection + velocity (signed, dominant axis)
+const tracker = new HandTracker();
+let velEMA = 0, handSpeed = 0, haveHand = false;
 
+// audio
 let audioCtx = null, analyser = null, srcNode = null;
 let freqPrev = null;
 
 const FLUX_MAX = 120;
-let fluxHist = [];
+let fluxHist = [];           // {v, onset}
 
 let lastOnsetAt     = -1;
 let lastStrokePfNow = -Infinity;
 let lastOnsetPfNow  = -Infinity;
-let velPrev = 0, velRising = false;
+let prevSpeed = 0, speedRising = false;
 
 let strokes = [];
 let downCount = 0, upCount = 0;
 
 let arrowFx = null;
+
+const AUDIO_REFRACTORY  = 0.12;   // s — min gap between audio onsets
+const MOTION_REFRACTORY = 0.12;
 
 // ── model ──────────────────────────────────────────────────────────────
 async function initModel(){
@@ -138,7 +149,7 @@ async function initModel(){
         modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
         delegate:"GPU"
       },
-      runningMode:"VIDEO", numHands:1,
+      runningMode:"VIDEO", numHands:2,
       minHandDetectionConfidence:0.4, minTrackingConfidence:0.4
     });
     drawer = new DrawingUtils(ctx);
@@ -203,8 +214,9 @@ function drawStill(){
 }
 function resetState(){
   strokes=[]; downCount=0; upCount=0;
-  prevCenter=null; velEMA=0; freqPrev=null; fluxHist=[];
-  lastOnsetAt=-1; velPrev=0; velRising=false; arrowFx=null;
+  velEMA=0; handSpeed=0; haveHand=false;
+  freqPrev=null; fluxHist=[];
+  lastOnsetAt=-1; prevSpeed=0; speedRising=false; arrowFx=null;
   lastStrokePfNow=-Infinity; lastOnsetPfNow=-Infinity;
 }
 
@@ -243,30 +255,31 @@ function loop(){
 function processFrame(tMs){
   ctx.drawImage(vid, 0, 0, cv.width, cv.height);
 
-  let center = null;
+  // 1. detect up to 2 hands, choose the strumming one by motion
   const res = handLandmarker.detectForVideo(vid, tMs);
-  if(res.landmarks?.length){
-    const lm = res.landmarks[0];
-    drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
-      {color:'#00FF8844', lineWidth:7});
-    drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
-      {color:CLR_DOWN, lineWidth:3});
-    drawer.drawLandmarks(lm,
-      {color:'#CC44FF99', fillColor:CLR_UP, radius:8, lineWidth:2});
-    const palm = [0,5,9,13,17];
-    let sx=0, sy=0;
-    palm.forEach(i=>{ sx+=lm[i].x; sy+=lm[i].y; });
-    center = {x:sx/palm.length, y:sy/palm.length};
+  const hands = res.landmarks ?? [];
+  const centers = hands.map(palmCenter);
+  const { chosen } = tracker.update(centers);
+
+  // 2. draw hands — chosen bright, the other dimmed
+  hands.forEach((lm, i)=>{
+    const isChosen = chosen && i === chosen.index;
+    drawHand(lm, isChosen);
+  });
+
+  // 3. velocity / speed from the chosen (strumming) hand
+  let center = null;
+  if(chosen){
+    haveHand = true;
+    velEMA    = chosen.velEMA;
+    handSpeed = chosen.speed;
+    const c = centers[chosen.index];
+    center = { x:c.x*cv.width, y:c.y*cv.height };
+  } else {
+    haveHand = false;
   }
 
-  if(center && prevCenter){
-    const dy = center.y - prevCenter.y;
-    const dx = center.x - prevCenter.x;
-    const motion = Math.abs(dy) >= Math.abs(dx) ? dy : dx;
-    velEMA = VEL_ALPHA * motion + (1-VEL_ALPHA) * velEMA;
-  }
-  prevCenter = center;
-
+  // 4. onset detection
   const t = vid.currentTime;
   const mode = $('onsetMode').value;
   let onset = false;
@@ -274,55 +287,68 @@ function processFrame(tMs){
   else onset = detectMotionOnset(t);
 
   if(onset && center){
-    const dir = velEMA >= 0 ? 'down' : 'up';
+    const dir = classifyDir(velEMA);
     registerStroke(t, dir);
-    arrowFx = {x:center.x*cv.width, y:center.y*cv.height, dir, born:performance.now()};
+    arrowFx = {x:center.x, y:center.y, dir, born:performance.now()};
   }
 
+  // 5. overlays
   drawArrowFx();
-  drawTopChips(center);
-  drawFluxStrip();          // slim strip at very bottom
-  drawPatternOverlay();     // floating pill above the strip
+  drawTopChips();
+  drawFluxStrip();
+  drawPatternOverlay();
+}
+
+// ── draw a single hand skeleton ────────────────────────────────────────
+function drawHand(lm, isChosen){
+  if(isChosen){
+    const dirCol = velEMA >= 0 ? CLR_DOWN : CLR_UP;
+    const rgb    = velEMA >= 0 ? RGB_DOWN : RGB_UP;
+    drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
+      {color:`rgba(${rgb},0.3)`, lineWidth:8});
+    drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
+      {color:dirCol, lineWidth:3});
+    drawer.drawLandmarks(lm,
+      {color:`rgba(${rgb},0.6)`, fillColor:dirCol, radius:7, lineWidth:2});
+  } else {
+    drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
+      {color:'rgba(140,140,140,0.45)', lineWidth:2});
+    drawer.drawLandmarks(lm,
+      {color:'rgba(140,140,140,0.5)', fillColor:CLR_DIM, radius:3, lineWidth:1});
+  }
 }
 
 // ── onset: audio flux ──────────────────────────────────────────────────
 function detectAudioOnset(t){
   const freq = new Float32Array(analyser.frequencyBinCount);
   analyser.getFloatFrequencyData(freq);
-  let flux = 0;
-  for(let i=0;i<freq.length;i++){
-    const a = isFinite(freq[i]) ? freq[i] : -140;
-    const b = isFinite(freqPrev[i]) ? freqPrev[i] : -140;
-    const d = a-b; if(d>0) flux+=d;
-    freqPrev[i]=a;
-  }
-  const sens = +$('sens').value;
-  const k = 2.6 - (sens-1)*(2.6-0.6)/9;
-  const vals = fluxHist.map(e=>e.v);
-  const mean = vals.length ? vals.reduce((s,v)=>s+v,0)/vals.length : 0;
-  const std  = vals.length > 2
-    ? Math.sqrt(vals.reduce((s,v)=>s+(v-mean)**2,0)/vals.length) : 1;
-  const isOnset = flux > mean + k*std && flux > 3 && (t-lastOnsetAt) > 0.1;
+  const { flux, nextPrev } = spectralFlux(freq, freqPrev);
+  freqPrev = nextPrev;
+
+  const k = sensToK(+$('sens').value);
+  const isOnset = audioOnsetDecision({
+    flux, histVals: fluxHist.map(e=>e.v), k, minFlux:3,
+    dtSinceLast: t - lastOnsetAt, refractory: AUDIO_REFRACTORY,
+  });
   if(isOnset){ lastOnsetAt = t; lastOnsetPfNow = performance.now(); }
   fluxHist.push({v:flux, onset:isOnset});
   if(fluxHist.length > FLUX_MAX) fluxHist.shift();
   return isOnset;
 }
 
-// ── onset: motion ──────────────────────────────────────────────────────
+// ── onset: motion peaks ────────────────────────────────────────────────
 function detectMotionOnset(t){
-  fluxHist.push({v:Math.abs(velEMA)*200, onset:false});
+  fluxHist.push({v:handSpeed*200, onset:false});
   if(fluxHist.length > FLUX_MAX) fluxHist.shift();
-  const sens = +$('sens').value;
-  const minMag = 0.013 - (sens-1)*(0.013-0.002)/9;
-  const speed = Math.abs(velEMA);
+  const minMag = sensToMinMag(+$('sens').value);
   let onset = false;
-  if(velRising && speed < velPrev && velPrev > minMag && (t-lastOnsetAt) > 0.11){
+  if(speedRising && handSpeed < prevSpeed && prevSpeed > minMag
+     && (t-lastOnsetAt) > MOTION_REFRACTORY){
     lastOnsetAt=t; onset=true; lastOnsetPfNow=performance.now();
     fluxHist[fluxHist.length-1].onset=true;
   }
-  velRising = speed > velPrev;
-  velPrev = speed;
+  speedRising = handSpeed > prevSpeed;
+  prevSpeed = handSpeed;
   return onset;
 }
 
@@ -332,24 +358,7 @@ function registerStroke(t, dir){
   lastStrokePfNow = performance.now();
 }
 
-// ── vibration helpers ──────────────────────────────────────────────────
-function vibScale(pfNow){
-  const age = (pfNow - lastStrokePfNow) / 1000;
-  if(age > 0.7) return 1;
-  const env = Math.exp(-age * 9);
-  const osc = (1 + Math.cos(age * 24)) / 2;
-  return 1 + env * 0.95 * osc;
-}
-
-function vibGlow(pfNow){
-  const age = (pfNow - lastOnsetPfNow) / 1000;
-  if(age > 0.6) return 0;
-  const env = Math.exp(-age * 8);
-  const osc = (1 + Math.cos(age * 28)) / 2;
-  return env * osc;
-}
-
-// ── arrow FX on hand ──────────────────────────────────────────────────
+// ── arrow FX on the strumming hand ────────────────────────────────────
 function drawArrowFx(){
   if(!arrowFx) return;
   const age = (performance.now() - arrowFx.born) / 750;
@@ -398,13 +407,13 @@ function drawArrowFx(){
 }
 
 // ── top metric chips ──────────────────────────────────────────────────
-function drawTopChips(center){
+function drawTopChips(){
   const isDown = velEMA >= 0;
-  const dir    = !center ? '—' : isDown ? 'DOWN ↓' : 'UP ↑';
-  const dirCol = !center ? '#888' : isDown ? CLR_DOWN : CLR_UP;
+  const dir    = !haveHand ? '—' : isDown ? 'DOWN ↓' : 'UP ↑';
+  const dirCol = !haveHand ? '#888' : isDown ? CLR_DOWN : CLR_UP;
   const chips  = [
     ['DIRECTION', dir, dirCol],
-    ['SPEED',  center ? (Math.abs(velEMA)*1000).toFixed(0) : '—', '#fff'],
+    ['SPEED',  haveHand ? (handSpeed*1000).toFixed(0) : '—', '#fff'],
     ['STROKES', String(strokes.length), '#fff'],
     ['DOWN/UP', `${downCount}/${upCount}`, '#fff'],
   ];
@@ -412,7 +421,7 @@ function drawTopChips(center){
   let x = 12;
   chips.forEach(([lbl,val,col])=>{
     const w = 106;
-    ctx.fillStyle = 'rgba(0,0,0,.72)';
+    ctx.fillStyle = 'rgba(0,0,0,.78)';
     roundRect(x, 10, w, 44, 6); ctx.fill();
     ctx.fillStyle = '#777';
     ctx.font = '800 8px -apple-system,sans-serif';
@@ -439,27 +448,24 @@ function roundRect(x,y,w,h,r){
 }
 
 // ── slim flux strip at canvas bottom ─────────────────────────────────
-const STRIP_H_FRAC = 0.14;   // 14% of canvas height
+const STRIP_H_FRAC = 0.13;
 
 function drawFluxStrip(){
   const W = cv.width, H = cv.height;
   const SH = Math.floor(H * STRIP_H_FRAC);
   const SY = H - SH;
 
-  ctx.fillStyle = 'rgba(0,0,0,.78)';
+  ctx.fillStyle = 'rgba(0,0,0,.86)';
   ctx.fillRect(0, SY, W, SH);
 
   const n = fluxHist.length;
-  if(n < 2){ return; }
+  if(n < 2) return;
 
-  const vals   = fluxHist.map(e=>e.v);
-  const mean   = vals.reduce((s,v)=>s+v,0)/vals.length;
-  const std    = vals.length > 2
-    ? Math.sqrt(vals.reduce((s,v)=>s+(v-mean)**2,0)/vals.length) : 1;
-  const sens   = +$('sens').value;
-  const k      = 2.6 - (sens-1)*(2.6-0.6)/9;
+  const vals = fluxHist.map(e=>e.v);
+  const { mean, std } = meanStd(vals);
+  const k = sensToK(+$('sens').value);
   const thresh = mean + k*std;
-  const maxV   = Math.max(...vals, thresh*1.1, 1);
+  const maxV = Math.max(...vals, thresh*1.1, 1);
 
   ctx.save();
   const BAR_W = W / FLUX_MAX;
@@ -477,13 +483,12 @@ function drawFluxStrip(){
     } else {
       ctx.shadowBlur  = 0;
       const intensity = Math.min(1, entry.v/Math.max(thresh,1));
-      ctx.fillStyle = `rgba(160,80,255,${0.12 + intensity*0.55})`;
+      ctx.fillStyle = `rgba(160,80,255,${0.18 + intensity*0.55})`;
     }
     ctx.fillRect(bx, by, Math.max(BAR_W-1,1), bh);
   });
   ctx.shadowBlur = 0;
 
-  // threshold line
   const ty = SY + SH - pad - (thresh/maxV)*(SH - pad*2);
   ctx.strokeStyle = `rgba(${RGB_DOWN},0.4)`;
   ctx.lineWidth = 1;
@@ -491,8 +496,7 @@ function drawFluxStrip(){
   ctx.beginPath(); ctx.moveTo(0,ty); ctx.lineTo(W,ty); ctx.stroke();
   ctx.setLineDash([]);
 
-  // onset pulse glow border
-  const pulse = vibGlow(performance.now());
+  const pulse = vibGlow((performance.now()-lastOnsetPfNow)/1000);
   if(pulse > 0.01){
     ctx.strokeStyle = `rgba(${RGB_DOWN},${pulse * 0.85})`;
     ctx.lineWidth   = 3;
@@ -502,7 +506,7 @@ function drawFluxStrip(){
     ctx.shadowBlur = 0;
   }
 
-  ctx.fillStyle = '#444';
+  ctx.fillStyle = '#555';
   ctx.font = '700 9px -apple-system,sans-serif';
   ctx.fillText('AUDIO FLUX', 6, SY + 11);
   ctx.restore();
@@ -518,38 +522,33 @@ function drawPatternOverlay(){
   const S      = Math.min(24, strokes.length);
   const recent = strokes.slice(-S);
 
-  // font size: fill ~85% of canvas width across all symbols + group gaps
-  const groups      = Math.ceil(S / 4);
-  const totalSlots  = S + groups - 1;
-  const rawFs = (W * 0.85) / (totalSlots * 0.72);
-  const fontSize    = Math.max(28, Math.min(80, rawFs));
+  const groups     = Math.ceil(S / 4);
+  const totalSlots = S + groups - 1;
+  const rawFs      = (W * 0.85) / (totalSlots * 0.72);
+  const fontSize   = Math.max(28, Math.min(80, rawFs));
 
   ctx.save();
   ctx.font = `900 ${fontSize}px -apple-system,monospace`;
   ctx.textBaseline = 'middle';
 
-  // measure total symbol run width
   let totalW = 0;
   recent.forEach((s, i) => {
     totalW += ctx.measureText(s.dir==='down' ? '↓' : '↑').width;
-    if(i > 0 && i % 4 === 0) totalW += fontSize * 0.4;   // group gap
-    if(i < S - 1)             totalW += fontSize * 0.1;   // letter gap
+    if(i > 0 && i % 4 === 0) totalW += fontSize * 0.4;
+    if(i < S - 1)             totalW += fontSize * 0.1;
   });
 
-  const pillPadX = 20, pillPadY = 10;
+  const pillPadX = 22, pillPadY = 10;
   const pillW = totalW + pillPadX * 2;
   const pillH = fontSize * 1.55;
   const pillX = (W - pillW) / 2;
-  // position: bottom of video area, just above the flux strip
-  const pillY = H - STRIP_H - pillH - 14;
+  const pillY = H - STRIP_H - pillH - 16;
 
-  // pill background with blur effect
-  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillStyle = 'rgba(0,0,0,0.82)';
   roundRect(pillX, pillY, pillW, pillH, pillH / 2);
   ctx.fill();
 
-  // subtle pill border that pulses on onset
-  const pulse = vibGlow(performance.now());
+  const pulse = vibGlow((performance.now()-lastOnsetPfNow)/1000);
   if(pulse > 0.02){
     ctx.strokeStyle = `rgba(${RGB_DOWN},${pulse * 0.6})`;
     ctx.lineWidth   = 2;
@@ -560,8 +559,7 @@ function drawPatternOverlay(){
     ctx.shadowBlur = 0;
   }
 
-  const now = performance.now();
-  const vib = vibScale(now);
+  const vib = vibScale((performance.now()-lastStrokePfNow)/1000);
   const cy  = pillY + pillH / 2;
   let cx    = pillX + pillPadX;
 
@@ -575,7 +573,6 @@ function drawPatternOverlay(){
     const symW   = ctx.measureText(sym).width;
 
     if(isLast && vib > 1.008){
-      // vibrating, scaled-up last symbol
       ctx.save();
       ctx.translate(cx + symW / 2, cy);
       ctx.scale(vib, vib);
@@ -598,25 +595,14 @@ function drawPatternOverlay(){
   });
   ctx.restore();
 
-  // BPM label to the right of pill
   const downs = strokes.filter(s=>s.dir==='down').map(s=>s.t);
-  let bpmTxt = '';
-  if(downs.length >= 3){
-    const gaps = [];
-    for(let i=1;i<downs.length;i++){
-      const g=downs[i]-downs[i-1]; if(g>.15&&g<2) gaps.push(g);
-    }
-    if(gaps.length){
-      gaps.sort((a,b)=>a-b);
-      bpmTxt = Math.round(60/gaps[Math.floor(gaps.length/2)]) + ' BPM';
-    }
-  }
-  if(bpmTxt){
+  const bpm   = estimateBPM(downs);
+  if(bpm){
     ctx.save();
     ctx.font = `700 ${Math.max(12, fontSize * 0.28)}px -apple-system,sans-serif`;
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#666';
-    ctx.fillText(bpmTxt, pillX + pillW + 10, pillY + pillH / 2);
+    ctx.fillStyle = '#888';
+    ctx.fillText(`${bpm} BPM`, pillX + pillW + 10, pillY + pillH / 2);
     ctx.restore();
   }
 }
