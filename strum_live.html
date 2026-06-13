@@ -23,18 +23,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 .ctl{display:flex;align-items:center;gap:6px}
 .ctl label{font-size:9px;font-weight:700;letter-spacing:.12em;color:#666;text-transform:uppercase}
 input[type=file]{font-size:11px;color:#999;max-width:190px}
-select{background:#1e1e1e;border:1px solid #2e2e2e;color:#fff;border-radius:6px;padding:6px 9px;font-size:11px;outline:none}
+select{background:#1e1e1e;border:1px solid #2e2e2e;color:#fff;border-radius:6px;
+  padding:6px 9px;font-size:11px;outline:none}
 .sens-row{display:flex;align-items:center;gap:5px}
 .sens-row input{accent-color:var(--green);width:80px}
 .sens-row .v{font-size:11px;font-weight:700;min-width:14px}
 
+/* stage fills all remaining vertical space */
 .stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
   background:#000;min-height:0;overflow:hidden}
-#cv{max-width:100%;max-height:100%;display:block;cursor:pointer}
+/* canvas fills the stage — browser scales it down to fit */
+#cv{max-width:100%;max-height:100%;display:block;cursor:pointer;image-rendering:auto}
 video{display:none}
 
 .status{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:14px;background:rgba(0,0,0,.82);z-index:5;text-align:center;padding:24px}
+  justify-content:center;gap:14px;background:rgba(0,0,0,.82);z-index:5;
+  text-align:center;padding:24px}
 .status.hidden{display:none}
 .spinner{width:40px;height:40px;border:3px solid #252525;border-top-color:var(--green);
   border-radius:50%;animation:spin .7s linear infinite}
@@ -86,16 +90,17 @@ video{display:none}
   <div id="pauseIcon">⏸</div>
 </div>
 
-<video id="vid" playsinline crossorigin="anonymous"></video>
+<video id="vid" playsinline preload="auto" crossorigin="anonymous"></video>
 
 <script type="module">
 import {
   HandLandmarker, FilesetResolver, DrawingUtils
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
 import {
-  palmCenter, classifyDir, spectralFlux,
-  audioOnsetDecision, sensToK, sensToMinMag, vibScale, vibGlow,
+  palmCenter, classifyDir, spectralFlux, audioOnsetDecision,
+  sensToK, sensToMinMag, vibScale, vibGlow,
   estimateBPM, meanStd, HandTracker,
+  calcCanvasSize, uiScale,
 } from "./strum_core.js";
 
 const $ = id => document.getElementById(id);
@@ -103,31 +108,28 @@ const vid = $('vid');
 const cv  = $('cv');
 const ctx = cv.getContext('2d');
 
-// palette
 const CLR_DOWN = '#00FF88';
 const CLR_UP   = '#CC44FF';
 const RGB_DOWN = '0,255,136';
 const RGB_UP   = '204,68,255';
-const CLR_DIM  = '#7a7a7a';
+const CLR_DIM  = '#888';
 
-// state
+// ── state ───────────────────────────────────────────────────────────────
 let handLandmarker = null, drawer = null;
 let running = false, lastVideoTime = -1, isPaused = false;
 
-// strumming-hand selection + velocity (signed, dominant axis)
 const tracker = new HandTracker();
 let velEMA = 0, handSpeed = 0, haveHand = false;
 
-// audio
 let audioCtx = null, analyser = null, srcNode = null;
 let freqPrev = null;
 
 const FLUX_MAX = 120;
-let fluxHist = [];           // {v, onset}
+let fluxHist = [];
 
-let lastOnsetAt     = -1;
-let lastStrokePfNow = -Infinity;
-let lastOnsetPfNow  = -Infinity;
+let lastOnsetAt      = -1;
+let lastOnsetPfNow   = -Infinity;
+let lastStrokePfNow  = -Infinity;
 let prevSpeed = 0, speedRising = false;
 
 let strokes = [];
@@ -135,10 +137,14 @@ let downCount = 0, upCount = 0;
 
 let arrowFx = null;
 
-const AUDIO_REFRACTORY  = 0.12;   // s — min gap between audio onsets
-const MOTION_REFRACTORY = 0.12;
+// MediaPipe frame-skip: run detection every other frame,
+// redraw the previous landmarks on the frames in between.
+// Halves GPU/CPU cost with no visible quality loss at 30 fps.
+let mpFrame = 0, lastMpResult = null, lastTrackerResult = {chosen:null};
 
-// ── model ──────────────────────────────────────────────────────────────
+const REFRACTORY = 0.12;
+
+// ── model ───────────────────────────────────────────────────────────────
 async function initModel(){
   try{
     const vision = await FilesetResolver.forVisionTasks(
@@ -168,7 +174,7 @@ function showStatus(msg, hint){
 }
 function hideStatus(){ $('status').classList.add('hidden'); }
 
-// ── file / webcam ──────────────────────────────────────────────────────
+// ── file / webcam ────────────────────────────────────────────────────────
 $('vfile').addEventListener('change', e=>{
   const f = e.target.files[0]; if(!f) return;
   stop(); vid.srcObject = null;
@@ -180,7 +186,7 @@ $('vfile').addEventListener('change', e=>{
 
 $('webcamBtn').addEventListener('click', async ()=>{
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+    const stream = await navigator.mediaDevices.getUserMedia({video:true, audio:false});
     stop(); vid.src=''; vid.srcObject=stream; vid.muted=true;
     $('onsetMode').value='motion';
     resetState();
@@ -189,7 +195,10 @@ $('webcamBtn').addEventListener('click', async ()=>{
 });
 
 $('playBtn').addEventListener('click', togglePlay);
-cv.addEventListener('click', togglePlay);
+cv.addEventListener('click', ()=>{
+  // only toggle if the video is actually ready (canvas sized)
+  if(vid.videoWidth > 0) togglePlay();
+});
 
 function togglePlay(){
   if(!vid.src && !vid.srcObject) return;
@@ -206,25 +215,31 @@ function setPauseUI(paused){
 $('resetBtn').addEventListener('click', ()=>{ resetState(); if(!isPaused) drawStill(); });
 
 function sizeCanvas(){
-  cv.width  = vid.videoWidth  || 640;
-  cv.height = vid.videoHeight || 480;
+  // Cap the longer dimension at 1280 px so MediaPipe stays fast on
+  // large files (4K, long portrait videos). The canvas is CSS-scaled
+  // to fill the stage, so the user sees the full-quality image.
+  const { w, h } = calcCanvasSize(vid.videoWidth||640, vid.videoHeight||480);
+  cv.width = w; cv.height = h;
 }
+
 function drawStill(){
   if(vid.readyState >= 2) ctx.drawImage(vid, 0, 0, cv.width, cv.height);
 }
+
 function resetState(){
   strokes=[]; downCount=0; upCount=0;
   velEMA=0; handSpeed=0; haveHand=false;
   freqPrev=null; fluxHist=[];
   lastOnsetAt=-1; prevSpeed=0; speedRising=false; arrowFx=null;
-  lastStrokePfNow=-Infinity; lastOnsetPfNow=-Infinity;
+  lastOnsetPfNow=-Infinity; lastStrokePfNow=-Infinity;
+  mpFrame=0; lastMpResult=null; lastTrackerResult={chosen:null};
 }
 
-// ── audio ──────────────────────────────────────────────────────────────
+// ── audio ────────────────────────────────────────────────────────────────
 function setupAudio(){
   if($('onsetMode').value !== 'audio' || vid.srcObject || audioCtx) return;
   try{
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
     srcNode  = audioCtx.createMediaElementSource(vid);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
@@ -238,87 +253,112 @@ function setupAudio(){
   }
 }
 
-// ── loop ───────────────────────────────────────────────────────────────
-function start(){ running=true; setPauseUI(false); requestAnimationFrame(loop); }
+// ── loop — prefer requestVideoFrameCallback (fires once per decoded frame)
+// over rAF (fires at monitor Hz, causing duplicate processing and
+// wasted MediaPipe calls on 30 fps video on a 60 Hz display).
+function start(){ running=true; setPauseUI(false); scheduleFrame(); }
 function stop() { running=false; }
 
-function loop(){
+function scheduleFrame(){
+  if(!running) return;
+  if(vid.requestVideoFrameCallback){
+    vid.requestVideoFrameCallback(rvfcTick);
+  } else {
+    requestAnimationFrame(rafTick);
+  }
+}
+
+function rvfcTick(now){
+  if(!running) return;
+  processFrame(now);
+  vid.requestVideoFrameCallback(rvfcTick);
+}
+
+function rafTick(){
   if(!running) return;
   if(vid.readyState >= 2 && vid.currentTime !== lastVideoTime){
     lastVideoTime = vid.currentTime;
     processFrame(performance.now());
   }
-  requestAnimationFrame(loop);
+  requestAnimationFrame(rafTick);
 }
 
-// ── frame ──────────────────────────────────────────────────────────────
+// ── core frame processing ────────────────────────────────────────────────
 function processFrame(tMs){
+  // Always draw the raw frame first — audio plays before hand detection
   ctx.drawImage(vid, 0, 0, cv.width, cv.height);
 
-  // 1. detect up to 2 hands, choose the strumming one by motion
-  const res = handLandmarker.detectForVideo(vid, tMs);
-  const hands = res.landmarks ?? [];
-  const centers = hands.map(palmCenter);
-  const { chosen } = tracker.update(centers);
+  // MediaPipe runs every other frame; reuse previous landmarks in between.
+  // The tracker is only updated on real detections to avoid false-zero
+  // motion reports on skip frames.
+  const doMP = (mpFrame++ % 2 === 0) || !lastMpResult;
+  let hands, chosen;
+  if(doMP){
+    lastMpResult = handLandmarker.detectForVideo(vid, tMs);
+    const centers = (lastMpResult.landmarks ?? []).map(palmCenter);
+    lastTrackerResult = tracker.update(centers);
+  }
+  hands  = lastMpResult?.landmarks ?? [];
+  chosen = lastTrackerResult.chosen;
 
-  // 2. draw hands — chosen bright, the other dimmed
-  hands.forEach((lm, i)=>{
-    const isChosen = chosen && i === chosen.index;
-    drawHand(lm, isChosen);
-  });
+  // draw all visible hands
+  hands.forEach((lm, i) => drawHand(lm, chosen && i === chosen.index));
 
-  // 3. velocity / speed from the chosen (strumming) hand
+  // velocity and position from the chosen strumming hand
   let center = null;
   if(chosen){
-    haveHand = true;
+    haveHand  = true;
     velEMA    = chosen.velEMA;
     handSpeed = chosen.speed;
-    const c = centers[chosen.index];
-    center = { x:c.x*cv.width, y:c.y*cv.height };
+    const lm = hands[chosen.index];
+    if(lm){
+      const c = palmCenter(lm);
+      center = { x: c.x * cv.width, y: c.y * cv.height };
+    }
   } else {
     haveHand = false;
   }
 
-  // 4. onset detection
-  const t = vid.currentTime;
+  // onset detection (audio runs every frame for accuracy; motion needs MP)
+  const t    = vid.currentTime;
   const mode = $('onsetMode').value;
-  let onset = false;
+  let onset  = false;
   if(mode === 'audio' && analyser) onset = detectAudioOnset(t);
-  else onset = detectMotionOnset(t);
+  else if(doMP) onset = detectMotionOnset(t);  // only on MP frames
 
   if(onset && center){
     const dir = classifyDir(velEMA);
     registerStroke(t, dir);
-    arrowFx = {x:center.x, y:center.y, dir, born:performance.now()};
+    arrowFx = { x: center.x, y: center.y, dir, born: performance.now() };
   }
 
-  // 5. overlays
+  // overlays
   drawArrowFx();
   drawTopChips();
   drawFluxStrip();
   drawPatternOverlay();
 }
 
-// ── draw a single hand skeleton ────────────────────────────────────────
+// ── draw a single hand skeleton ──────────────────────────────────────────
 function drawHand(lm, isChosen){
   if(isChosen){
-    const dirCol = velEMA >= 0 ? CLR_DOWN : CLR_UP;
-    const rgb    = velEMA >= 0 ? RGB_DOWN : RGB_UP;
+    const rgb = velEMA >= 0 ? RGB_DOWN : RGB_UP;
+    const col = velEMA >= 0 ? CLR_DOWN : CLR_UP;
     drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
-      {color:`rgba(${rgb},0.3)`, lineWidth:8});
+      {color:`rgba(${rgb},0.28)`, lineWidth:10});
     drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
-      {color:dirCol, lineWidth:3});
+      {color:col, lineWidth:4});
     drawer.drawLandmarks(lm,
-      {color:`rgba(${rgb},0.6)`, fillColor:dirCol, radius:7, lineWidth:2});
+      {color:`rgba(${rgb},0.55)`, fillColor:col, radius:9, lineWidth:2});
   } else {
     drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
-      {color:'rgba(140,140,140,0.45)', lineWidth:2});
+      {color:'rgba(120,120,120,0.4)', lineWidth:2});
     drawer.drawLandmarks(lm,
-      {color:'rgba(140,140,140,0.5)', fillColor:CLR_DIM, radius:3, lineWidth:1});
+      {color:'rgba(120,120,120,0.45)', fillColor:CLR_DIM, radius:3, lineWidth:1});
   }
 }
 
-// ── onset: audio flux ──────────────────────────────────────────────────
+// ── audio onset ──────────────────────────────────────────────────────────
 function detectAudioOnset(t){
   const freq = new Float32Array(analyser.frequencyBinCount);
   analyser.getFloatFrequencyData(freq);
@@ -327,28 +367,28 @@ function detectAudioOnset(t){
 
   const k = sensToK(+$('sens').value);
   const isOnset = audioOnsetDecision({
-    flux, histVals: fluxHist.map(e=>e.v), k, minFlux:3,
-    dtSinceLast: t - lastOnsetAt, refractory: AUDIO_REFRACTORY,
+    flux, histVals: fluxHist.map(e=>e.v), k, minFlux: 3,
+    dtSinceLast: t - lastOnsetAt, refractory: REFRACTORY,
   });
   if(isOnset){ lastOnsetAt = t; lastOnsetPfNow = performance.now(); }
-  fluxHist.push({v:flux, onset:isOnset});
+  fluxHist.push({v: flux, onset: isOnset});
   if(fluxHist.length > FLUX_MAX) fluxHist.shift();
   return isOnset;
 }
 
-// ── onset: motion peaks ────────────────────────────────────────────────
+// ── motion onset ─────────────────────────────────────────────────────────
 function detectMotionOnset(t){
-  fluxHist.push({v:handSpeed*200, onset:false});
+  fluxHist.push({v: handSpeed * 200, onset: false});
   if(fluxHist.length > FLUX_MAX) fluxHist.shift();
   const minMag = sensToMinMag(+$('sens').value);
   let onset = false;
   if(speedRising && handSpeed < prevSpeed && prevSpeed > minMag
-     && (t-lastOnsetAt) > MOTION_REFRACTORY){
-    lastOnsetAt=t; onset=true; lastOnsetPfNow=performance.now();
-    fluxHist[fluxHist.length-1].onset=true;
+     && (t - lastOnsetAt) > REFRACTORY){
+    lastOnsetAt = t; onset = true; lastOnsetPfNow = performance.now();
+    fluxHist[fluxHist.length-1].onset = true;
   }
   speedRising = handSpeed > prevSpeed;
-  prevSpeed = handSpeed;
+  prevSpeed   = handSpeed;
   return onset;
 }
 
@@ -358,19 +398,20 @@ function registerStroke(t, dir){
   lastStrokePfNow = performance.now();
 }
 
-// ── arrow FX on the strumming hand ────────────────────────────────────
+// ── arrow FX (damped vibration on the strumming hand) ────────────────────
 function drawArrowFx(){
   if(!arrowFx) return;
-  const age = (performance.now() - arrowFx.born) / 750;
-  if(age >= 1){ arrowFx=null; return; }
+  const ageSec = (performance.now() - arrowFx.born) / 1000;
+  if(ageSec >= 0.75){ arrowFx = null; return; }
 
-  const env = Math.exp(-age * 7);
-  const osc = (1 + Math.cos(age * 22)) / 2;
-  const vib = 1 + env * 0.7 * osc;
-  const alpha = Math.pow(1 - age, 1.4);
+  const { arrowSize } = uiScale(cv.width, cv.height);
+  const env   = Math.exp(-ageSec * 7);
+  const osc   = (1 + Math.cos(ageSec * 22)) / 2;
+  const vib   = 1 + env * 0.7 * osc;
+  const alpha = Math.pow(1 - ageSec / 0.75, 1.4);
   const isDown = arrowFx.dir === 'down';
-  const rgb = isDown ? RGB_DOWN : RGB_UP;
-  const size = 90 * vib;
+  const rgb  = isDown ? RGB_DOWN : RGB_UP;
+  const size = arrowSize * vib;
   const {x, y} = arrowFx;
   const d = isDown ? 1 : -1;
 
@@ -378,36 +419,35 @@ function drawArrowFx(){
   ctx.globalAlpha = alpha;
   ctx.lineCap = 'round';
 
+  // wide glowing shaft
   ctx.shadowColor = `rgb(${rgb})`;
-  ctx.shadowBlur  = 40 * env + 12;
-  ctx.strokeStyle = `rgba(${rgb},0.35)`;
-  ctx.lineWidth   = 22 * vib;
-  ctx.beginPath();
-  ctx.moveTo(x, y - d*size/2);
-  ctx.lineTo(x, y + d*size/2);
-  ctx.stroke();
+  ctx.shadowBlur  = 44 * env + 12;
+  ctx.strokeStyle = `rgba(${rgb},0.32)`;
+  ctx.lineWidth   = 26 * vib;
+  ctx.beginPath(); ctx.moveTo(x, y - d*size/2); ctx.lineTo(x, y + d*size/2); ctx.stroke();
 
-  ctx.shadowBlur  = 18;
+  // crisp inner shaft
+  ctx.shadowBlur  = 16;
   ctx.strokeStyle = `rgb(${rgb})`;
   ctx.lineWidth   = 7;
-  ctx.beginPath();
-  ctx.moveTo(x, y - d*size/2);
-  ctx.lineTo(x, y + d*size/2);
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x, y - d*size/2); ctx.lineTo(x, y + d*size/2); ctx.stroke();
 
+  // arrowhead
   ctx.fillStyle  = `rgb(${rgb})`;
   ctx.shadowBlur = 22;
+  const hw = size / 3;
   ctx.beginPath();
-  ctx.moveTo(x,           y + d*size/2);
-  ctx.lineTo(x - size/3,  y + d*size/2 - d*size/3);
-  ctx.lineTo(x + size/3,  y + d*size/2 - d*size/3);
-  ctx.closePath();
-  ctx.fill();
+  ctx.moveTo(x,      y + d*size/2);
+  ctx.lineTo(x - hw, y + d*size/2 - d*hw);
+  ctx.lineTo(x + hw, y + d*size/2 - d*hw);
+  ctx.closePath(); ctx.fill();
   ctx.restore();
 }
 
-// ── top metric chips ──────────────────────────────────────────────────
+// ── top metric chips — scale with canvas height ───────────────────────────
 function drawTopChips(){
+  const { chipH, chipW, chipGap, chipPadX,
+          chipLabelSz, chipValueSz } = uiScale(cv.width, cv.height);
   const isDown = velEMA >= 0;
   const dir    = !haveHand ? '—' : isDown ? 'DOWN ↓' : 'UP ↑';
   const dirCol = !haveHand ? '#888' : isDown ? CLR_DOWN : CLR_UP;
@@ -418,148 +458,159 @@ function drawTopChips(){
     ['DOWN/UP', `${downCount}/${upCount}`, '#fff'],
   ];
   ctx.save();
-  let x = 12;
-  chips.forEach(([lbl,val,col])=>{
-    const w = 106;
-    ctx.fillStyle = 'rgba(0,0,0,.78)';
-    roundRect(x, 10, w, 44, 6); ctx.fill();
-    ctx.fillStyle = '#777';
-    ctx.font = '800 8px -apple-system,sans-serif';
-    ctx.fillText(lbl, x+8, 24);
+  const TOP = Math.round(cv.height * 0.012);
+  let x = chipGap;
+  chips.forEach(([lbl, val, col]) => {
+    ctx.fillStyle = 'rgba(0,0,0,.8)';
+    roundRect(x, TOP, chipW, chipH, 7); ctx.fill();
+
+    ctx.fillStyle = '#666';
+    ctx.font = `800 ${chipLabelSz}px -apple-system,sans-serif`;
+    ctx.textBaseline = 'top';
+    ctx.fillText(lbl, x + chipPadX, TOP + chipH * 0.14);
+
     ctx.shadowColor = col !== '#fff' ? col : 'transparent';
-    ctx.shadowBlur  = col !== '#fff' ? 8 : 0;
+    ctx.shadowBlur  = col !== '#fff' ? 10 : 0;
     ctx.fillStyle   = col;
-    ctx.font = '800 17px -apple-system,sans-serif';
-    ctx.fillText(val, x+8, 42);
+    ctx.font = `800 ${chipValueSz}px -apple-system,sans-serif`;
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(val, x + chipPadX, TOP + chipH * 0.92);
     ctx.shadowBlur = 0;
-    x += w + 6;
+    x += chipW + chipGap;
   });
   ctx.restore();
 }
 
-function roundRect(x,y,w,h,r){
+function roundRect(x, y, w, h, r){
   ctx.beginPath();
-  ctx.moveTo(x+r,y);
-  ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
-  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
-  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
-  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.arcTo(x+w, y,   x+w, y+r,   r);
+  ctx.lineTo(x+w, y+h-r); ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+  ctx.lineTo(x+r, y+h);  ctx.arcTo(x,   y+h, x,   y+h-r, r);
+  ctx.lineTo(x, y+r);    ctx.arcTo(x,   y,   x+r,  y,   r);
   ctx.closePath();
 }
 
-// ── slim flux strip at canvas bottom ─────────────────────────────────
-const STRIP_H_FRAC = 0.13;
-
+// ── scrolling audio-flux strip at the bottom ─────────────────────────────
 function drawFluxStrip(){
   const W = cv.width, H = cv.height;
-  const SH = Math.floor(H * STRIP_H_FRAC);
-  const SY = H - SH;
+  const { stripH } = uiScale(W, H);
+  const SY = H - stripH;
 
-  ctx.fillStyle = 'rgba(0,0,0,.86)';
-  ctx.fillRect(0, SY, W, SH);
+  ctx.fillStyle = 'rgba(0,0,0,.88)';
+  ctx.fillRect(0, SY, W, stripH);
 
   const n = fluxHist.length;
   if(n < 2) return;
 
-  const vals = fluxHist.map(e=>e.v);
+  const vals = fluxHist.map(e => e.v);
   const { mean, std } = meanStd(vals);
-  const k = sensToK(+$('sens').value);
-  const thresh = mean + k*std;
-  const maxV = Math.max(...vals, thresh*1.1, 1);
+  const k      = sensToK(+$('sens').value);
+  const thresh = mean + k * std;
+  const maxV   = Math.max(...vals, thresh * 1.1, 1);
 
   ctx.save();
   const BAR_W = W / FLUX_MAX;
-  const pad = 3;
+  const pad   = 4;
   const offset = FLUX_MAX - n;
 
-  fluxHist.forEach((entry, i)=>{
-    const bh = (entry.v / maxV) * (SH - pad*2);
+  fluxHist.forEach((entry, i) => {
+    const bh = (entry.v / maxV) * (stripH - pad * 2);
     const bx = (offset + i) * BAR_W;
-    const by = SY + SH - pad - bh;
+    const by = SY + stripH - pad - bh;
     if(entry.onset){
       ctx.fillStyle   = CLR_DOWN;
       ctx.shadowColor = CLR_DOWN;
-      ctx.shadowBlur  = 12;
+      ctx.shadowBlur  = 14;
     } else {
       ctx.shadowBlur  = 0;
-      const intensity = Math.min(1, entry.v/Math.max(thresh,1));
-      ctx.fillStyle = `rgba(160,80,255,${0.18 + intensity*0.55})`;
+      const intensity = Math.min(1, entry.v / Math.max(thresh, 1));
+      ctx.fillStyle   = `rgba(160,80,255,${0.18 + intensity * 0.55})`;
     }
-    ctx.fillRect(bx, by, Math.max(BAR_W-1,1), bh);
+    ctx.fillRect(bx, by, Math.max(BAR_W - 1, 1), bh);
   });
   ctx.shadowBlur = 0;
 
-  const ty = SY + SH - pad - (thresh/maxV)*(SH - pad*2);
+  // threshold line
+  const ty = SY + stripH - pad - (thresh / maxV) * (stripH - pad * 2);
   ctx.strokeStyle = `rgba(${RGB_DOWN},0.4)`;
   ctx.lineWidth = 1;
-  ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(0,ty); ctx.lineTo(W,ty); ctx.stroke();
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(0, ty); ctx.lineTo(W, ty); ctx.stroke();
   ctx.setLineDash([]);
 
-  const pulse = vibGlow((performance.now()-lastOnsetPfNow)/1000);
-  if(pulse > 0.01){
-    ctx.strokeStyle = `rgba(${RGB_DOWN},${pulse * 0.85})`;
+  // pulse border on recent onset
+  const pulse = vibGlow((performance.now() - lastOnsetPfNow) / 1000);
+  if(pulse > 0.02){
+    ctx.strokeStyle = `rgba(${RGB_DOWN},${pulse * 0.75})`;
     ctx.lineWidth   = 3;
     ctx.shadowColor = CLR_DOWN;
     ctx.shadowBlur  = 16 * pulse;
-    ctx.strokeRect(1, SY+1, W-2, SH-2);
-    ctx.shadowBlur = 0;
+    ctx.strokeRect(1, SY + 1, W - 2, stripH - 2);
+    ctx.shadowBlur  = 0;
   }
 
-  ctx.fillStyle = '#555';
-  ctx.font = '700 9px -apple-system,sans-serif';
-  ctx.fillText('AUDIO FLUX', 6, SY + 11);
+  ctx.fillStyle    = 'rgba(100,100,100,0.8)';
+  ctx.font         = `700 ${Math.max(10, Math.round(stripH * 0.14))}px -apple-system,sans-serif`;
+  ctx.textBaseline = 'top';
+  ctx.fillText('AUDIO FLUX', 8, SY + 5);
   ctx.restore();
 }
 
-// ── PATTERN OVERLAY — floating pill on the video ──────────────────────
+// ── pattern pill — floating above the flux strip ──────────────────────────
 function drawPatternOverlay(){
   if(!strokes.length) return;
 
   const W = cv.width, H = cv.height;
-  const STRIP_H = Math.floor(H * STRIP_H_FRAC);
+  const { stripH, patternFont } = uiScale(W, H);
 
   const S      = Math.min(24, strokes.length);
   const recent = strokes.slice(-S);
 
+  // font large enough to fill the pill but respecting the computed scale
   const groups     = Math.ceil(S / 4);
   const totalSlots = S + groups - 1;
-  const rawFs      = (W * 0.85) / (totalSlots * 0.72);
-  const fontSize   = Math.max(28, Math.min(80, rawFs));
+  const autoFs     = (W * 0.87) / (totalSlots * 0.72);
+  const fontSize   = Math.max(patternFont, Math.min(patternFont * 1.5, autoFs));
 
   ctx.save();
-  ctx.font = `900 ${fontSize}px -apple-system,monospace`;
+  ctx.font         = `900 ${fontSize}px -apple-system,monospace`;
   ctx.textBaseline = 'middle';
 
+  // measure total rendered width
   let totalW = 0;
   recent.forEach((s, i) => {
-    totalW += ctx.measureText(s.dir==='down' ? '↓' : '↑').width;
+    totalW += ctx.measureText(s.dir === 'down' ? '↓' : '↑').width;
     if(i > 0 && i % 4 === 0) totalW += fontSize * 0.4;
     if(i < S - 1)             totalW += fontSize * 0.1;
   });
 
-  const pillPadX = 22, pillPadY = 10;
-  const pillW = totalW + pillPadX * 2;
-  const pillH = fontSize * 1.55;
-  const pillX = (W - pillW) / 2;
-  const pillY = H - STRIP_H - pillH - 16;
+  const pillPadX = fontSize * 0.35;
+  const pillPadY = fontSize * 0.22;
+  const pillW    = totalW + pillPadX * 2;
+  const pillH    = fontSize + pillPadY * 2;
+  const pillX    = (W - pillW) / 2;
+  const pillY    = H - stripH - pillH - Math.round(H * 0.018);
 
-  ctx.fillStyle = 'rgba(0,0,0,0.82)';
+  // pill background
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
   roundRect(pillX, pillY, pillW, pillH, pillH / 2);
   ctx.fill();
 
-  const pulse = vibGlow((performance.now()-lastOnsetPfNow)/1000);
-  if(pulse > 0.02){
-    ctx.strokeStyle = `rgba(${RGB_DOWN},${pulse * 0.6})`;
-    ctx.lineWidth   = 2;
+  // glowing pill border on recent onset
+  const borderPulse = vibGlow((performance.now() - lastOnsetPfNow) / 1000);
+  if(borderPulse > 0.02){
+    ctx.strokeStyle = `rgba(${RGB_DOWN},${borderPulse * 0.65})`;
+    ctx.lineWidth   = 3;
     ctx.shadowColor = CLR_DOWN;
-    ctx.shadowBlur  = 12 * pulse;
+    ctx.shadowBlur  = 14 * borderPulse;
     roundRect(pillX, pillY, pillW, pillH, pillH / 2);
     ctx.stroke();
-    ctx.shadowBlur = 0;
+    ctx.shadowBlur  = 0;
   }
 
-  const vib = vibScale((performance.now()-lastStrokePfNow)/1000);
+  // draw symbols — last one vibrates on the beat
+  const vib = vibScale((performance.now() - lastStrokePfNow) / 1000);
   const cy  = pillY + pillH / 2;
   let cx    = pillX + pillPadX;
 
@@ -568,41 +619,45 @@ function drawPatternOverlay(){
 
     const sym    = s.dir === 'down' ? '↓' : '↑';
     const isLast = i === recent.length - 1;
-    const isDown = s.dir === 'down';
-    const col    = isDown ? CLR_DOWN : CLR_UP;
+    const col    = s.dir === 'down' ? CLR_DOWN : CLR_UP;
+    const rgb    = s.dir === 'down' ? RGB_DOWN : RGB_UP;
     const symW   = ctx.measureText(sym).width;
 
-    if(isLast && vib > 1.008){
+    if(isLast && vib > 1.01){
       ctx.save();
       ctx.translate(cx + symW / 2, cy);
       ctx.scale(vib, vib);
-      const glow = 28 + (vib - 1) * 80;
-      ctx.shadowColor = col;
-      ctx.fillStyle   = col;
-      ctx.shadowBlur  = glow * 1.8;
+      const glow = 30 + (vib - 1) * 90;
+      ctx.shadowColor = col; ctx.fillStyle = col;
+      ctx.shadowBlur  = glow * 2;
       ctx.fillText(sym, -symW / 2, 0);
       ctx.shadowBlur  = glow * 0.5;
       ctx.fillText(sym, -symW / 2, 0);
       ctx.restore();
     } else {
       ctx.shadowColor = col;
-      ctx.shadowBlur  = isLast ? 20 : 10;
+      ctx.shadowBlur  = isLast ? 24 : 10;
       ctx.fillStyle   = col;
-      ctx.fillText(sym, cx, cy);
-    }
 
+      // completed strokes: show direction-tinted glow; last one is brightest
+      if(!isLast) ctx.globalAlpha = 0.75 + 0.25 * (i / (S - 1));
+      ctx.fillText(sym, cx, cy);
+      ctx.globalAlpha = 1;
+    }
+    ctx.shadowBlur = 0;
     cx += symW + fontSize * 0.1;
   });
   ctx.restore();
 
-  const downs = strokes.filter(s=>s.dir==='down').map(s=>s.t);
+  // BPM label to the right of the pill
+  const downs = strokes.filter(s => s.dir === 'down').map(s => s.t);
   const bpm   = estimateBPM(downs);
   if(bpm){
     ctx.save();
-    ctx.font = `700 ${Math.max(12, fontSize * 0.28)}px -apple-system,sans-serif`;
+    ctx.font         = `700 ${Math.max(12, Math.round(fontSize * 0.3))}px -apple-system,sans-serif`;
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#888';
-    ctx.fillText(`${bpm} BPM`, pillX + pillW + 10, pillY + pillH / 2);
+    ctx.fillStyle    = 'rgba(140,140,140,0.9)';
+    ctx.fillText(`${bpm} BPM`, pillX + pillW + Math.round(W * 0.01), pillY + pillH / 2);
     ctx.restore();
   }
 }

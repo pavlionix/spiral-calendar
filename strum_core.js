@@ -1,4 +1,6 @@
 // strum_core.js — pure, browser-free strum-detection logic.
+// Imported by strum_live.html (browser) and strum_core.test.mjs (Node).
+// Must not reference DOM, canvas, MediaPipe, or browser globals.
 // Imported by strum_live.html (in the browser) and by strum_core.test.mjs
 // (in Node). Must not reference DOM, canvas, MediaPipe, or globals.
 
@@ -100,6 +102,34 @@ export function estimateBPM(downTimes) {
   gaps.sort((a, b) => a - b);
   const median = gaps[Math.floor(gaps.length / 2)];
   return Math.round(60 / median);
+}
+
+// ── canvas sizing ──────────────────────────────────────────────────────
+// Cap the processing canvas so that the longer dimension never exceeds
+// maxDim. This keeps MediaPipe fast on 4K/portrait files without
+// changing the displayed video quality (we only size the draw canvas).
+export function calcCanvasSize(vw, vh, maxDim = 1280) {
+  const scale = Math.min(1, maxDim / Math.max(vw, vh));
+  return { w: Math.round(vw * scale), h: Math.round(vh * scale) };
+}
+
+// All canvas overlay dimensions as functions of the canvas pixel size.
+// Using H-relative values means the same code works for 480p portraits,
+// 720p landscapes, and 4K clips after the canvas cap is applied.
+export function uiScale(canvasW, canvasH) {
+  const H = canvasH, W = canvasW;
+  const chipH = Math.max(56, Math.round(H * 0.07));
+  return {
+    chipH,
+    chipW:       Math.max(100, Math.round(W * 0.13)),
+    chipGap:     Math.max(5,   Math.round(W * 0.006)),
+    chipPadX:    Math.max(8,   Math.round(chipH * 0.18)),
+    chipLabelSz: Math.max(9,   Math.round(chipH * 0.22)),
+    chipValueSz: Math.max(16,  Math.round(chipH * 0.50)),
+    stripH:      Math.max(72,  Math.round(H * 0.17)),
+    patternFont: Math.max(64,  Math.round(H * 0.09)),
+    arrowSize:   Math.max(90,  Math.round(H * 0.15)),
+  };
 }
 
 // ── HandTracker — choose the strumming hand by motion ──────────────────

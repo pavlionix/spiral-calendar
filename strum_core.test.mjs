@@ -9,7 +9,7 @@ import * as core from './strum_core.js';
 import {
   meanStd, palmCenter, dominantAxisDelta, classifyDir,
   spectralFlux, audioOnsetDecision, vibScale, vibGlow,
-  estimateBPM, HandTracker,
+  estimateBPM, HandTracker, calcCanvasSize, uiScale,
 } from './strum_core.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -165,6 +165,54 @@ test('HandTracker: no hands => chosen is null', () => {
   assert.equal(res.chosen, null);
 });
 
+// ── calcCanvasSize ─────────────────────────────────────────────────────
+test('calcCanvasSize: caps 4K landscape to 1280×720', () => {
+  const { w, h } = calcCanvasSize(3840, 2160);
+  assert.equal(w, 1280);
+  assert.equal(h, 720);
+});
+test('calcCanvasSize: caps 4K portrait (longest dim) to 720×1280', () => {
+  const { w, h } = calcCanvasSize(2160, 3840);
+  assert.equal(w, 720);
+  assert.equal(h, 1280);
+});
+test('calcCanvasSize: leaves small video unchanged', () => {
+  const { w, h } = calcCanvasSize(640, 480);
+  assert.equal(w, 640);
+  assert.equal(h, 480);
+});
+test('calcCanvasSize: HD 1920×1080 scaled to exactly 1280×720', () => {
+  const { w, h } = calcCanvasSize(1920, 1080);
+  assert.equal(w, 1280);
+  assert.equal(h, 720);
+});
+test('calcCanvasSize: custom maxDim is respected', () => {
+  const { w } = calcCanvasSize(1920, 1080, 960);
+  assert.equal(w, 960);
+});
+
+// ── uiScale ────────────────────────────────────────────────────────────
+test('uiScale: all values increase with canvas size', () => {
+  const small = uiScale(640, 480);
+  const large = uiScale(1280, 720);
+  for (const key of Object.keys(small)) {
+    assert.ok(large[key] >= small[key], `${key}: ${large[key]} >= ${small[key]}`);
+  }
+});
+test('uiScale: minimum floors prevent zero-size elements on tiny canvas', () => {
+  const tiny = uiScale(100, 100);
+  assert.ok(tiny.chipH      >= 56);
+  assert.ok(tiny.patternFont >= 64);
+  assert.ok(tiny.stripH      >= 72);
+  assert.ok(tiny.arrowSize   >= 90);
+});
+test('uiScale: portrait canvas (H > W) gives larger pattern font than landscape', () => {
+  const portrait   = uiScale(540, 960);
+  const landscape  = uiScale(960, 540);
+  // portrait has more height → bigger font
+  assert.ok(portrait.patternFont > landscape.patternFont);
+});
+
 // ── wiring guard: strum_live.html stays in sync with the module ────────
 test('strum_live.html imports only symbols that strum_core exports', () => {
   const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
@@ -178,4 +226,16 @@ test('strum_live.html imports only symbols that strum_core exports', () => {
 test('strum_live.html requests two hands from MediaPipe', () => {
   const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
   assert.match(html, /numHands:\s*2/, 'must detect 2 hands to pick the strummer');
+});
+test('strum_live.html uses calcCanvasSize for sizeCanvas', () => {
+  const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
+  assert.match(html, /calcCanvasSize/, 'must cap canvas to limit MediaPipe cost on large files');
+});
+test('strum_live.html uses uiScale for chip and overlay sizing', () => {
+  const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
+  assert.match(html, /uiScale\(/, 'must derive all overlay sizes from uiScale');
+});
+test('strum_live.html uses requestVideoFrameCallback for efficient loop', () => {
+  const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
+  assert.match(html, /requestVideoFrameCallback/, 'must use rvfc to avoid duplicate frame processing');
 });
