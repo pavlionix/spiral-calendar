@@ -137,7 +137,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
 .mc .val{font-size:56px;font-weight:900;line-height:1;color:#000;letter-spacing:-.03em}
 .mc .sub{font-size:11px;color:var(--card-sub);margin-top:5px;font-weight:500}
 
-/* direction card — large arrow, color-coded */
+/* direction card — sticky at top, always visible */
+#dc{position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.08)}
 #dc .val{font-size:72px}
 #dc.down .val{color:var(--orange)}
 #dc.up   .val{color:var(--blue)}
@@ -230,14 +231,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
       </div>
       <div class="fg">
         <label>ROI — x1,y1,x2,y2 fractions (strumming hand region)</label>
-        <input type="text" id="froi" value="0.0,0.2,1.0,1.0">
+        <input type="text" id="froi" value="0.0,0.2,1.0,0.9">
       </div>
       <div class="fg">
         <label>Sensitivity (higher = detect more strokes)</label>
         <div class="sens-row">
-          <input type="range" id="fsens" min="1" max="10" value="5"
+          <input type="range" id="fsens" min="1" max="10" value="7"
             oninput="$('sens-display').textContent=this.value">
-          <span class="sens-val" id="sens-display">5</span>
+          <span class="sens-val" id="sens-display">7</span>
         </div>
       </div>
       <button type="submit" class="btn-primary" id="abtn">Analyze Pattern</button>

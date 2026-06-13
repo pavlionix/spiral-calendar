@@ -138,7 +138,10 @@ def vertical_motion_signal(video_path, start, duration, roi, debug_dir=None):
         mag = np.linalg.norm(flow, axis=2)
         thresh = max(0.5, float(np.percentile(mag, 90)))
         mask = mag >= thresh
-        vy = float(flow[..., 1][mask].mean()) if mask.any() else 0.0
+        # Use whichever axis has stronger mean motion (handles any camera angle)
+        vy_raw = float(flow[..., 1][mask].mean()) if mask.any() else 0.0
+        vx_raw = float(flow[..., 0][mask].mean()) if mask.any() else 0.0
+        vy = vy_raw if abs(vy_raw) >= abs(vx_raw) else vx_raw
 
         times.append((i + 1) / fps)
         velocities.append(vy)
