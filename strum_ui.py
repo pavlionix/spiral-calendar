@@ -52,198 +52,259 @@ HTML = r"""<!DOCTYPE html>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
   --orange:#E8472A;--blue:#2277DD;
-  --bg:#0e0e0e;--card:#fff;--card-sub:#f5f5f5;
-  --divider:#ddd;--dark-bg:#1a1a1a;--panel:#111
+  --bg:#0e0e0e;--card:#ffffff;--divider:#e8e8e8;
+  --dark-bg:#1a1a1a;--panel:#111;--card-sub:#777
 }
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;
      background:var(--bg);color:#fff;min-height:100dvh;display:flex;flex-direction:column}
 
 /* ── Upload ─────────────────────────────────────────────────────── */
 #upload-screen{flex:1;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;padding:24px;gap:8px}
-#upload-screen h1{font-size:26px;font-weight:800;letter-spacing:-.02em}
-#upload-screen p{color:#777;font-size:14px;margin-bottom:20px}
-.form-card{background:var(--dark-bg);border-radius:16px;padding:28px 24px;
-  width:100%;max-width:460px}
-.fg{margin-bottom:18px}
-.fg label{display:block;font-size:10px;font-weight:700;letter-spacing:.14em;
-  color:var(--orange);margin-bottom:6px}
+  justify-content:center;padding:24px;gap:10px}
+.upload-title{font-size:13px;font-weight:800;letter-spacing:.18em;color:var(--orange);
+  text-transform:uppercase}
+.upload-headline{font-size:28px;font-weight:900;letter-spacing:-.02em;color:#fff}
+.upload-sub{color:#555;font-size:13px;margin-bottom:16px}
+.form-card{background:var(--dark-bg);border-radius:12px;padding:28px 24px;
+  width:100%;max-width:480px;border:1px solid #252525}
+.fg{margin-bottom:16px}
+.fg label{display:block;font-size:9px;font-weight:800;letter-spacing:.16em;
+  color:var(--orange);text-transform:uppercase;margin-bottom:6px}
 .fg input[type=text],.fg input[type=number],.fg input[type=file]{
-  width:100%;padding:10px 14px;background:#252525;border:1px solid #333;
-  border-radius:8px;color:#fff;font-size:14px;outline:none}
+  width:100%;padding:10px 14px;background:#1e1e1e;border:1px solid #2e2e2e;
+  border-radius:6px;color:#fff;font-size:14px;outline:none;transition:border-color .15s}
 .fg input:focus{border-color:var(--orange)}
-.row2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
-.btn-primary{width:100%;padding:13px;background:var(--orange);border:none;
-  border-radius:8px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;
-  letter-spacing:.05em;transition:opacity .15s}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.btn-primary{width:100%;padding:14px;background:var(--orange);border:none;
+  border-radius:6px;color:#fff;font-size:13px;font-weight:800;cursor:pointer;
+  letter-spacing:.1em;text-transform:uppercase;transition:opacity .15s}
 .btn-primary:hover{opacity:.88}
-.btn-primary:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed}
 
 /* ── Processing ─────────────────────────────────────────────────── */
 #processing-screen{flex:1;display:none;flex-direction:column;align-items:center;
-  justify-content:center;gap:14px}
-.spinner{width:44px;height:44px;border:4px solid #333;border-top-color:var(--orange);
-  border-radius:50%;animation:spin .8s linear infinite}
+  justify-content:center;gap:16px}
+.spinner{width:40px;height:40px;border:3px solid #2a2a2a;border-top-color:var(--orange);
+  border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-#proc-label{color:#888;font-size:14px}
+#proc-label{color:#555;font-size:12px;letter-spacing:.1em;text-transform:uppercase}
 
 /* ── Results ────────────────────────────────────────────────────── */
-#results-screen{flex:1;display:none;flex-direction:column}
+#results-screen{flex:1;display:none;flex-direction:column;min-height:0}
 .r-header{display:flex;align-items:center;justify-content:space-between;
-  padding:10px 16px;background:var(--panel);border-bottom:1px solid #222}
-.r-header h2{font-size:15px;font-weight:700}
-.r-header button{padding:5px 12px;background:transparent;border:1px solid #444;
-  border-radius:20px;color:#bbb;cursor:pointer;font-size:12px}
+  padding:10px 16px;background:#0a0a0a;border-bottom:1px solid #1c1c1c}
+.r-header-left{display:flex;flex-direction:column;gap:2px}
+.r-header-eyebrow{font-size:9px;font-weight:800;letter-spacing:.18em;color:var(--orange);
+  text-transform:uppercase}
+.r-header-title{font-size:15px;font-weight:800;color:#fff;letter-spacing:-.01em}
+.r-back-btn{padding:6px 14px;background:transparent;border:1px solid #2e2e2e;
+  border-radius:20px;color:#666;cursor:pointer;font-size:11px;font-weight:600;
+  letter-spacing:.05em;transition:border-color .15s,color .15s}
+.r-back-btn:hover{border-color:#555;color:#bbb}
 
-/* main grid */
-.main-grid{display:grid;grid-template-columns:1fr 220px;flex:1}
-@media(max-width:600px){.main-grid{grid-template-columns:1fr}}
+/* main two-column grid — 60/40 split */
+.main-grid{display:grid;grid-template-columns:60fr 40fr;flex:1;min-height:0}
+@media(max-width:680px){.main-grid{grid-template-columns:1fr}}
 
-/* video panel */
-.vpanel{position:relative;background:#000;display:flex;align-items:center;justify-content:center}
-#frame-canvas{width:100%;height:auto;display:block;max-height:480px;object-fit:contain}
-.ftime{position:absolute;bottom:8px;left:8px;background:rgba(0,0,0,.65);
-  padding:2px 8px;border-radius:4px;font-size:11px;color:#ccc;
-  font-variant-numeric:tabular-nums;letter-spacing:.03em}
+/* ── video panel ──────────────────────────────────────────────── */
+.vpanel{position:relative;background:#000;display:flex;align-items:center;
+  justify-content:center;overflow:hidden}
+#frame-canvas{width:100%;height:auto;display:block;max-height:500px;object-fit:contain}
+.ftime{position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,.7);
+  padding:3px 10px;border-radius:4px;font-size:11px;color:#ccc;
+  font-variant-numeric:tabular-nums;letter-spacing:.05em;font-weight:600}
 
-/* metrics panel */
-.mpanel{display:flex;flex-direction:column;border-left:1px solid #222}
+/* ── metrics panel ────────────────────────────────────────────── */
+.mpanel{display:flex;flex-direction:column;border-left:1px solid #1c1c1c;overflow-y:auto}
 
-.mc{background:var(--card);color:#000;padding:10px 14px;flex:1;
-  border-bottom:1px solid var(--divider)}
-.mc .lbl{font-size:9px;font-weight:800;letter-spacing:.15em;color:var(--orange);margin-bottom:4px}
-.mc .val{font-size:38px;font-weight:800;line-height:1.05;color:#000}
-.mc .sub{font-size:10px;color:#777;margin-top:3px}
+/* generic metric card */
+.mc{background:var(--card);color:#000;padding:14px 18px;
+  border-bottom:1px solid var(--divider);flex-shrink:0}
+.mc .lbl{font-size:9px;font-weight:800;letter-spacing:.16em;
+  color:var(--orange);text-transform:uppercase;margin-bottom:6px}
+.mc .val{font-size:56px;font-weight:900;line-height:1;color:#000;letter-spacing:-.03em}
+.mc .sub{font-size:11px;color:var(--card-sub);margin-top:5px;font-weight:500}
 
-/* direction card */
+/* direction card — large arrow, color-coded */
+#dc .val{font-size:72px}
 #dc.down .val{color:var(--orange)}
 #dc.up   .val{color:var(--blue)}
-#dc.none .val{color:#bbb}
+#dc.none .val{color:#ccc}
+
+/* speed card gets a smaller value + sparkline below */
+#sc-card .val{font-size:52px}
 
 /* sparkline */
-#spk{width:100%;height:36px;display:block;margin-top:6px}
+#spk{width:100%;height:36px;display:block;margin-top:8px}
 
-/* pattern grid */
-.pgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;margin-top:8px}
-.pc{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;border-radius:4px;background:#f0f0f0;
-  font-size:13px;font-weight:700;transition:background .15s}
-.pc .bl{font-size:7px;color:#bbb;font-weight:400;margin-top:1px}
-.pc.active{background:var(--orange)!important;color:#fff}
-.pc.active .bl{color:rgba(255,255,255,.6)}
-.pc.dbeat{background:#FFE4DE}
-.pc.ubeat{background:#DCE8FF}
+/* BPM card */
+#bc .val{font-size:56px}
 
-/* timeline */
-.tbar{padding:10px 16px 14px;background:var(--panel)}
-.tlbl{font-size:9px;color:#555;letter-spacing:.1em;margin-bottom:6px}
-#wfc{width:100%;height:52px;display:block}
-#scrub{width:100%;height:3px;background:#333;border-radius:2px;
-  appearance:none;cursor:pointer;outline:none;margin-top:6px;display:block}
-#scrub::-webkit-slider-thumb{appearance:none;width:14px;height:14px;
-  background:var(--orange);border-radius:50%}
-.sdots{position:relative;height:10px;margin-top:4px}
+/* pattern card */
+#pc{flex:1;min-height:0}
+#pc .lbl{color:var(--orange)}
+#pc .pat-found{font-size:38px;font-weight:900;letter-spacing:-.02em}
+#pc .pat-found.yes{color:var(--orange)}
+#pc .pat-found.no{color:#bbb}
+
+/* 8-cell pattern grid */
+.pgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;margin-top:10px}
+.pc-cell{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;border-radius:5px;background:#f0f0f0;
+  font-size:14px;font-weight:800;transition:background .12s,outline .12s;
+  outline:2px solid transparent;outline-offset:1px}
+.pc-cell .bl{font-size:7px;color:#bbb;font-weight:500;margin-top:2px;line-height:1}
+.pc-cell.active{outline:2px solid var(--orange);animation:pulse .4s ease}
+@keyframes pulse{0%{outline-width:3px}50%{outline-width:5px}100%{outline-width:2px}}
+.pc-cell.dbeat{background:#FFE0D8;color:var(--orange)}
+.pc-cell.ubeat{background:#D6E5FF;color:var(--blue)}
+.pc-cell.dbeat.active{background:#FFE0D8}
+.pc-cell.ubeat.active{background:#D6E5FF}
+.pc-cell.rest{background:#f0f0f0;color:#bbb}
+
+/* ── bottom timeline bar ──────────────────────────────────────── */
+.tbar{padding:12px 18px 16px;background:#0a0a0a;border-top:1px solid #1c1c1c;flex-shrink:0}
+.tbar-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.tlbl{font-size:9px;color:#444;letter-spacing:.12em;text-transform:uppercase;font-weight:700}
+.legend{display:flex;gap:14px;align-items:center}
+.leg-item{display:flex;align-items:center;gap:5px;font-size:10px;color:#555;font-weight:600}
+.leg-dot{width:8px;height:8px;border-radius:50%}
+#wfc{width:100%;height:54px;display:block;border-radius:4px;overflow:hidden}
+#scrub{width:100%;height:3px;background:#222;border-radius:2px;
+  -webkit-appearance:none;appearance:none;cursor:pointer;outline:none;
+  margin-top:8px;display:block}
+#scrub::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+  width:14px;height:14px;background:var(--orange);border-radius:50%;cursor:grab}
+#scrub::-moz-range-thumb{width:14px;height:14px;background:var(--orange);
+  border-radius:50%;border:none;cursor:grab}
+.sdots{position:relative;height:10px;margin-top:6px}
 .sd{position:absolute;top:0;width:8px;height:8px;border-radius:50%;
-  transform:translateX(-50%)}
+  transform:translateX(-50%);cursor:default}
 .sd.down{background:var(--orange)}
 .sd.up{background:var(--blue)}
-
-/* legend */
-.legend{display:flex;gap:12px;padding:0 0 10px;align-items:center}
-.leg-item{display:flex;align-items:center;gap:5px;font-size:10px;color:#666}
-.leg-dot{width:8px;height:8px;border-radius:50%}
 </style>
 </head>
 <body>
 
-<!-- ── Upload ────────────────────────────────────────────── -->
+<!-- ════════════════════════════════════════════════════════════
+     UPLOAD SCREEN
+═════════════════════════════════════════════════════════════ -->
 <div id="upload-screen">
-  <h1>🎸 Strum Analyzer</h1>
-  <p>Upload a guitar video — get the strumming pattern</p>
+  <div class="upload-title">Guitar Analytics</div>
+  <div class="upload-headline">Strum Pattern Analyzer</div>
+  <div class="upload-sub">Upload a guitar video — get the strumming pattern</div>
+
   <div class="form-card">
     <form id="uform">
       <div class="fg">
-        <label>VIDEO FILE (mp4, mov, webm…)</label>
+        <label>Video File (mp4, mov, webm)</label>
         <input type="file" id="vfile" accept="video/*" required>
       </div>
-      <div class="row2">
-        <div class="fg"><label>START (s)</label>
+      <div class="row3">
+        <div class="fg"><label>Start (s)</label>
           <input type="number" id="fstart" value="10" min="0" step="1"></div>
-        <div class="fg"><label>DURATION (s)</label>
+        <div class="fg"><label>Duration (s)</label>
           <input type="number" id="fdur" value="16" min="4" max="60" step="1"></div>
         <div class="fg"><label>BPM (opt)</label>
           <input type="number" id="fbpm" placeholder="auto" min="40" max="240"></div>
       </div>
       <div class="fg">
-        <label>ROI — x1,y1,x2,y2 fractions where strumming hand is</label>
+        <label>ROI — x1,y1,x2,y2 fractions (strumming hand region)</label>
         <input type="text" id="froi" value="0.4,0.2,1.0,1.0">
       </div>
-      <button type="submit" class="btn-primary" id="abtn">ANALYZE PATTERN</button>
+      <button type="submit" class="btn-primary" id="abtn">Analyze Pattern</button>
     </form>
   </div>
 </div>
 
-<!-- ── Processing ───────────────────────────────────────── -->
+<!-- ════════════════════════════════════════════════════════════
+     PROCESSING SCREEN
+═════════════════════════════════════════════════════════════ -->
 <div id="processing-screen">
   <div class="spinner"></div>
-  <div id="proc-label">Uploading…</div>
+  <div id="proc-label">Uploading</div>
 </div>
 
-<!-- ── Results ──────────────────────────────────────────── -->
+<!-- ════════════════════════════════════════════════════════════
+     RESULTS SCREEN
+═════════════════════════════════════════════════════════════ -->
 <div id="results-screen">
+
+  <!-- header bar -->
   <div class="r-header">
-    <h2>Strum Pattern Analysis</h2>
-    <button id="rbtn">← New video</button>
+    <div class="r-header-left">
+      <div class="r-header-eyebrow">Guitar Analytics</div>
+      <div class="r-header-title">Strum Pattern Analysis</div>
+    </div>
+    <button class="r-back-btn" id="rbtn">New Video</button>
   </div>
 
+  <!-- main 60/40 grid -->
   <div class="main-grid">
-    <!-- video -->
+
+    <!-- ── LEFT: video frame ──────────────────────────── -->
     <div class="vpanel">
       <canvas id="frame-canvas"></canvas>
       <div class="ftime" id="ftime">0.00 s</div>
     </div>
 
-    <!-- metrics -->
+    <!-- ── RIGHT: stacked metric cards ──────────────────── -->
     <div class="mpanel">
-      <!-- direction -->
+
+      <!-- STRUM DIRECTION -->
       <div class="mc" id="dc">
-        <div class="lbl">STRUM DIRECTION</div>
+        <div class="lbl">Strum Direction</div>
         <div class="val" id="dval">·</div>
-        <div class="sub" id="dsub">waiting…</div>
+        <div class="sub" id="dsub">waiting for data</div>
       </div>
 
-      <!-- speed -->
-      <div class="mc">
-        <div class="lbl">STRUM SPEED</div>
+      <!-- STRUM SPEED -->
+      <div class="mc" id="sc-card">
+        <div class="lbl">Strum Speed</div>
         <div class="val" id="sval">0.0</div>
-        <div class="sub">optical flow velocity</div>
+        <div class="sub">optical flow units</div>
         <canvas id="spk"></canvas>
       </div>
 
-      <!-- bpm -->
-      <div class="mc">
-        <div class="lbl">TEMPO</div>
-        <div class="val" id="bval">–</div>
+      <!-- TEMPO -->
+      <div class="mc" id="bc">
+        <div class="lbl">Tempo</div>
+        <div class="val" id="bval">—</div>
         <div class="sub">BPM estimated</div>
       </div>
 
-      <!-- pattern -->
-      <div class="mc" style="flex:2">
-        <div class="lbl">BAR PATTERN</div>
+      <!-- PATTERN -->
+      <div class="mc" id="pc">
+        <div class="lbl">Pattern?</div>
+        <div class="pat-found" id="pat-found-label">—</div>
         <div class="pgrid" id="pgrid"></div>
-        <div class="sub" id="psub" style="margin-top:6px"></div>
+        <div class="sub" id="psub" style="margin-top:8px"></div>
+      </div>
+
+    </div><!-- /mpanel -->
+  </div><!-- /main-grid -->
+
+  <!-- ── BOTTOM: velocity timeline ──────────────────────── -->
+  <div class="tbar">
+    <div class="tbar-header">
+      <div class="tlbl">Velocity Timeline</div>
+      <div class="legend">
+        <div class="leg-item">
+          <div class="leg-dot" style="background:var(--orange)"></div>
+          Downstroke
+        </div>
+        <div class="leg-item">
+          <div class="leg-dot" style="background:var(--blue)"></div>
+          Upstroke
+        </div>
       </div>
     </div>
-  </div>
-
-  <!-- timeline -->
-  <div class="tbar">
-    <div class="tlbl">VELOCITY TIMELINE (orange = down, blue = up)</div>
     <canvas id="wfc"></canvas>
     <input type="range" id="scrub" min="0" value="0" step="1">
     <div class="sdots" id="sdots"></div>
   </div>
-</div>
+
+</div><!-- /results-screen -->
 
 <script>
 // ── state ─────────────────────────────────────────────────────────
@@ -274,7 +335,7 @@ $('uform').addEventListener('submit', async e => {
   if(bpmv) fd.append('bpm', bpmv);
 
   show('processing');
-  $('proc-label').textContent = 'Uploading…';
+  $('proc-label').textContent = 'Uploading';
 
   try{
     const r = await fetch('/analyze', {method:'POST', body:fd});
@@ -294,8 +355,16 @@ $('rbtn').addEventListener('click', ()=>{ stopPlay(); show('upload'); });
 
 // ── init results ─────────────────────────────────────────────────
 function initResults(){
+  sphist = [];
+
   // BPM
-  $('bval').textContent = data.bpm || '–';
+  $('bval').textContent = data.bpm || '—';
+
+  // Pattern found label
+  const hasBar = !!(data.best_bar);
+  const pfl = $('pat-found-label');
+  pfl.textContent = hasBar ? 'YES' : 'NO';
+  pfl.className = 'pat-found ' + (hasBar ? 'yes' : 'no');
 
   // Pattern grid
   const labels = ['1','&','2','&','3','&','4','&'];
@@ -304,8 +373,12 @@ function initResults(){
   const bar = data.best_bar || Array(8).fill('·');
   bar.forEach((sym,i)=>{
     const c = document.createElement('div');
-    c.className = 'pc' + (sym==='↓'?' dbeat':sym==='↑'?' ubeat':'');
-    c.innerHTML = sym + `<span class="bl">${labels[i]}</span>`;
+    let cls = 'pc-cell';
+    if(sym==='↓') cls += ' dbeat';
+    else if(sym==='↑') cls += ' ubeat';
+    else cls += ' rest';
+    c.className = cls;
+    c.innerHTML = `<span>${sym}</span><span class="bl">${labels[i]}</span>`;
     grid.appendChild(c);
   });
   $('psub').textContent = data.bar_info || '';
@@ -362,8 +435,7 @@ function renderFrame(idx){
   $('dval').textContent = dir==='down'?'↓': dir==='up'?'↑':'·';
   $('dsub').textContent = dir==='down'?'DOWNSTROKE': dir==='up'?'UPSTROKE':'no stroke';
 
-  // Speed
-  // map frame index to nearest velocity sample
+  // Speed — map frame index to nearest velocity sample
   const vi = Math.min(Math.round(idx * data.vel_series.length / data.frames.length),
                       data.vel_series.length-1);
   const vy = data.vel_series[vi]?.vy || 0;
@@ -386,7 +458,7 @@ function highlightBar(t){
   const t0  = data.strokes[0].time;
   const slot = Math.round((t-t0)/eighth);
   const pos  = ((slot % 8) + 8) % 8;
-  document.querySelectorAll('.pc').forEach((c,i)=>{
+  document.querySelectorAll('.pc-cell').forEach((c,i)=>{
     c.classList.toggle('active', i===pos);
   });
 }
@@ -401,7 +473,6 @@ function drawSparkline(){
   if(sphist.length<2) return;
   const mx = Math.max(...sphist.map(Math.abs),1);
 
-  // area fill
   ctx.beginPath();
   sphist.forEach((v,i)=>{
     const x = i/(SPK_LEN-1)*w, y = h/2 - (v/mx)*(h/2-3);
@@ -418,23 +489,23 @@ function drawSparkline(){
 
 // ── waveform ─────────────────────────────────────────────────────
 function drawWaveform(){
-  const cv=$('wfc'), w=cv.parentElement.clientWidth||400, h=52;
+  const cv=$('wfc'), w=cv.parentElement.clientWidth||400, h=54;
   cv.width=w; cv.height=h;
   const ctx=cv.getContext('2d');
   const ser = data.vel_series;
   if(!ser.length) return;
 
   const mx = Math.max(...ser.map(s=>Math.abs(s.vy)),1);
-  ctx.fillStyle='#1a1a1a'; ctx.fillRect(0,0,w,h);
+  ctx.fillStyle='#111'; ctx.fillRect(0,0,w,h);
 
   const bw = w/ser.length+.5;
   ser.forEach((pt,i)=>{
     const x  = i/ser.length*w;
     const bh = (pt.vy/mx)*(h/2-2);
-    ctx.fillStyle = pt.vy>0 ? '#E8472A88' : '#2277DD88';
+    ctx.fillStyle = pt.vy>0 ? '#E8472A99' : '#2277DD99';
     bh>0 ? ctx.fillRect(x,h/2,bw,bh) : ctx.fillRect(x,h/2+bh,bw,-bh);
   });
-  ctx.strokeStyle='#333'; ctx.lineWidth=1;
+  ctx.strokeStyle='#2a2a2a'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
 }
 
