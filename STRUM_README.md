@@ -4,7 +4,45 @@ Strum Analyzer detects guitar strumming patterns from a video file or YouTube UR
 
 ---
 
-## Requirements
+## 🔴 Live mode (recommended) — `strum_live.html`
+
+A **fully browser-based** real-time analyzer. No Python, no server processing — it
+runs MediaPipe Hands + the Web Audio API entirely in your browser, so it is fast
+and plays the audio.
+
+**What it does**
+- Tracks the **21 hand landmarks** on the strumming hand and draws them on the
+  video (just like the MediaPipe demo).
+- Detects strums from the **audio onsets** (the actual moment a chord is struck),
+  then classifies each as ↓ or ↑ from the hand's motion direction at that instant —
+  i.e. it pairs *sound* with *motion* to tell which stroke produced the note.
+- Overlays a live ↓/↑ arrow on the hand at each strum, shows DIRECTION / SPEED /
+  STROKE metrics on the video, and builds the running pattern (e.g. `↓↓↑ ↑↑↑ ↓↓↑`)
+  plus a live BPM estimate at the bottom.
+- Also supports **webcam** input (motion-only mode).
+
+**How to run** (module scripts need to be served over http, not `file://`):
+```bash
+cd strum-analyzer
+python -m http.server 8000
+# open http://localhost:8000/strum_live.html
+```
+Then: choose a video file → **Play**. First load downloads the MediaPipe model
+(~10 MB) from the CDN, so you need an internet connection once.
+
+**Controls**
+- **Source**: `Audio onsets` (default, most accurate — needs a video with sound) or
+  `Motion only` (for silent clips / webcam).
+- **Sens**: how readily strums are detected (raise it if it misses strokes).
+- **Webcam**: analyze your own playing live.
+
+> The Python tools below (`strum_analyzer.py` CLI and `strum_ui.py` server) are the
+> original offline/batch engine. They still work but are slower because they process
+> every frame server-side; for interactive use prefer `strum_live.html`.
+
+---
+
+## Requirements (Python tools)
 
 ```bash
 pip install flask opencv-python numpy   # core (motion engine + web UI)
