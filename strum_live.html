@@ -6,17 +6,16 @@
 <title>Strum Live</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--orange:#E8472A;--blue:#2277DD;--bg:#0c0c0c}
+:root{--green:#00FF88;--purple:#CC44FF;--bg:#0c0c0c}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   background:var(--bg);color:#fff;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 
-/* ── top bar ── */
 .topbar{display:flex;align-items:center;gap:12px;padding:8px 14px;background:#0a0a0a;
   border-bottom:1px solid #1c1c1c;flex-shrink:0;flex-wrap:wrap}
 .brand{display:flex;flex-direction:column;gap:1px;margin-right:auto}
-.brand .ey{font-size:9px;font-weight:800;letter-spacing:.18em;color:var(--orange);text-transform:uppercase}
+.brand .ey{font-size:9px;font-weight:800;letter-spacing:.18em;color:var(--green);text-transform:uppercase}
 .brand .ti{font-size:14px;font-weight:800}
-.btn{padding:8px 15px;background:var(--orange);border:none;border-radius:6px;color:#fff;
+.btn{padding:8px 15px;background:#E8472A;border:none;border-radius:6px;color:#fff;
   font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:opacity .15s}
 .btn:hover{opacity:.88}
 .btn.ghost{background:transparent;border:1px solid #2e2e2e;color:#aaa}
@@ -26,26 +25,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 input[type=file]{font-size:11px;color:#999;max-width:190px}
 select{background:#1e1e1e;border:1px solid #2e2e2e;color:#fff;border-radius:6px;padding:6px 9px;font-size:11px;outline:none}
 .sens-row{display:flex;align-items:center;gap:5px}
-.sens-row input{accent-color:var(--orange);width:80px}
+.sens-row input{accent-color:var(--green);width:80px}
 .sens-row .v{font-size:11px;font-weight:700;min-width:14px}
 
-/* ── stage ── */
 .stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
   background:#000;min-height:0;overflow:hidden}
 #cv{max-width:100%;max-height:100%;display:block;cursor:pointer}
 video{display:none}
 
-/* ── status overlay ── */
 .status{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
   justify-content:center;gap:14px;background:rgba(0,0,0,.82);z-index:5;text-align:center;padding:24px}
 .status.hidden{display:none}
-.spinner{width:40px;height:40px;border:3px solid #252525;border-top-color:var(--orange);
+.spinner{width:40px;height:40px;border:3px solid #252525;border-top-color:var(--green);
   border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .status .msg{font-size:13px;color:#aaa;max-width:400px;line-height:1.5}
 .status .hint{font-size:11px;color:#555;max-width:400px;line-height:1.5}
 
-/* ── pause indicator ── */
 #pauseIcon{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
   font-size:80px;color:rgba(255,255,255,.55);pointer-events:none}
 </style>
@@ -97,40 +93,41 @@ import {
   HandLandmarker, FilesetResolver, DrawingUtils
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
 
-// ── refs ───────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const vid = $('vid');
 const cv  = $('cv');
 const ctx = cv.getContext('2d');
 
-// ── state ──────────────────────────────────────────────────────────────
+// palette
+const CLR_DOWN = '#00FF88';
+const CLR_UP   = '#CC44FF';
+const RGB_DOWN = '0,255,136';
+const RGB_UP   = '204,68,255';
+
+// state
 let handLandmarker = null, drawer = null;
 let running = false, lastVideoTime = -1, isPaused = false;
 
-// motion
 let prevCenter = null, velEMA = 0;
 const VEL_ALPHA = 0.55;
 
-// audio
 let audioCtx = null, analyser = null, srcNode = null;
 let freqPrev = null;
 
-// flux history: [{v, onset}] — kept at max FLUX_MAX entries
 const FLUX_MAX = 120;
-let fluxHist = [];   // {v:number, onset:bool}
+let fluxHist = [];
 
-// onsets
-let lastOnsetAt  = -1;
+let lastOnsetAt     = -1;
+let lastStrokePfNow = -Infinity;
+let lastOnsetPfNow  = -Infinity;
 let velPrev = 0, velRising = false;
 
-// pattern
-let strokes = [];    // {t, dir}
+let strokes = [];
 let downCount = 0, upCount = 0;
 
-// arrow FX
-let arrowFx = null;  // {x,y,dir,born}
+let arrowFx = null;
 
-// ── model init ─────────────────────────────────────────────────────────
+// ── model ──────────────────────────────────────────────────────────────
 async function initModel(){
   try{
     const vision = await FilesetResolver.forVisionTasks(
@@ -163,8 +160,7 @@ function hideStatus(){ $('status').classList.add('hidden'); }
 // ── file / webcam ──────────────────────────────────────────────────────
 $('vfile').addEventListener('change', e=>{
   const f = e.target.files[0]; if(!f) return;
-  stop();
-  vid.srcObject = null;
+  stop(); vid.srcObject = null;
   vid.src = URL.createObjectURL(f);
   vid.muted = false; vid.loop = true;
   resetState();
@@ -174,8 +170,7 @@ $('vfile').addEventListener('change', e=>{
 $('webcamBtn').addEventListener('click', async ()=>{
   try{
     const stream = await navigator.mediaDevices.getUserMedia({video:true,audio:false});
-    stop();
-    vid.src=''; vid.srcObject=stream; vid.muted=true;
+    stop(); vid.src=''; vid.srcObject=stream; vid.muted=true;
     $('onsetMode').value='motion';
     resetState();
     vid.onloadeddata=()=>{ sizeCanvas(); vid.play(); start(); };
@@ -187,11 +182,8 @@ cv.addEventListener('click', togglePlay);
 
 function togglePlay(){
   if(!vid.src && !vid.srcObject) return;
-  if(running){
-    vid.pause(); stop(); setPauseUI(true);
-  } else {
-    setupAudio(); vid.play(); start(); setPauseUI(false);
-  }
+  if(running){ vid.pause(); stop(); setPauseUI(true); }
+  else { setupAudio(); vid.play(); start(); setPauseUI(false); }
 }
 
 function setPauseUI(paused){
@@ -213,6 +205,7 @@ function resetState(){
   strokes=[]; downCount=0; upCount=0;
   prevCenter=null; velEMA=0; freqPrev=null; fluxHist=[];
   lastOnsetAt=-1; velPrev=0; velRising=false; arrowFx=null;
+  lastStrokePfNow=-Infinity; lastOnsetPfNow=-Infinity;
 }
 
 // ── audio ──────────────────────────────────────────────────────────────
@@ -233,7 +226,7 @@ function setupAudio(){
   }
 }
 
-// ── main loop ──────────────────────────────────────────────────────────
+// ── loop ───────────────────────────────────────────────────────────────
 function start(){ running=true; setPauseUI(false); requestAnimationFrame(loop); }
 function stop() { running=false; }
 
@@ -246,38 +239,34 @@ function loop(){
   requestAnimationFrame(loop);
 }
 
-// ── core frame processing ──────────────────────────────────────────────
+// ── frame ──────────────────────────────────────────────────────────────
 function processFrame(tMs){
   ctx.drawImage(vid, 0, 0, cv.width, cv.height);
 
-  // 1. hand landmarks
   let center = null;
   const res = handLandmarker.detectForVideo(vid, tMs);
   if(res.landmarks?.length){
     const lm = res.landmarks[0];
     drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
-      {color:'#00E08A66', lineWidth:6});
+      {color:'#00FF8844', lineWidth:7});
     drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS,
-      {color:'#00E08A', lineWidth:3});
+      {color:CLR_DOWN, lineWidth:3});
     drawer.drawLandmarks(lm,
-      {color:'#FF334499', fillColor:'#FF3344', radius:8, lineWidth:2});
+      {color:'#CC44FF99', fillColor:CLR_UP, radius:8, lineWidth:2});
     const palm = [0,5,9,13,17];
     let sx=0, sy=0;
     palm.forEach(i=>{ sx+=lm[i].x; sy+=lm[i].y; });
     center = {x:sx/palm.length, y:sy/palm.length};
   }
 
-  // 2. velocity EMA
   if(center && prevCenter){
     const dy = center.y - prevCenter.y;
     const dx = center.x - prevCenter.x;
-    // use whichever axis moves more
     const motion = Math.abs(dy) >= Math.abs(dx) ? dy : dx;
     velEMA = VEL_ALPHA * motion + (1-VEL_ALPHA) * velEMA;
   }
   prevCenter = center;
 
-  // 3. onset detection
   const t = vid.currentTime;
   const mode = $('onsetMode').value;
   let onset = false;
@@ -290,13 +279,13 @@ function processFrame(tMs){
     arrowFx = {x:center.x*cv.width, y:center.y*cv.height, dir, born:performance.now()};
   }
 
-  // 4. draw all overlays
   drawArrowFx();
   drawTopChips(center);
-  drawBottomOverlay();
+  drawFluxStrip();          // slim strip at very bottom
+  drawPatternOverlay();     // floating pill above the strip
 }
 
-// ── onset: spectral flux ───────────────────────────────────────────────
+// ── onset: audio flux ──────────────────────────────────────────────────
 function detectAudioOnset(t){
   const freq = new Float32Array(analyser.frequencyBinCount);
   analyser.getFloatFrequencyData(freq);
@@ -314,15 +303,14 @@ function detectAudioOnset(t){
   const std  = vals.length > 2
     ? Math.sqrt(vals.reduce((s,v)=>s+(v-mean)**2,0)/vals.length) : 1;
   const isOnset = flux > mean + k*std && flux > 3 && (t-lastOnsetAt) > 0.1;
-  if(isOnset) lastOnsetAt = t;
+  if(isOnset){ lastOnsetAt = t; lastOnsetPfNow = performance.now(); }
   fluxHist.push({v:flux, onset:isOnset});
   if(fluxHist.length > FLUX_MAX) fluxHist.shift();
   return isOnset;
 }
 
-// ── onset: motion peaks ────────────────────────────────────────────────
+// ── onset: motion ──────────────────────────────────────────────────────
 function detectMotionOnset(t){
-  // push a zero-flux entry so the chart still scrolls
   fluxHist.push({v:Math.abs(velEMA)*200, onset:false});
   if(fluxHist.length > FLUX_MAX) fluxHist.shift();
   const sens = +$('sens').value;
@@ -330,7 +318,7 @@ function detectMotionOnset(t){
   const speed = Math.abs(velEMA);
   let onset = false;
   if(velRising && speed < velPrev && velPrev > minMag && (t-lastOnsetAt) > 0.11){
-    lastOnsetAt=t; onset=true;
+    lastOnsetAt=t; onset=true; lastOnsetPfNow=performance.now();
     fluxHist[fluxHist.length-1].onset=true;
   }
   velRising = speed > velPrev;
@@ -341,27 +329,65 @@ function detectMotionOnset(t){
 function registerStroke(t, dir){
   strokes.push({t, dir});
   if(dir==='down') downCount++; else upCount++;
+  lastStrokePfNow = performance.now();
 }
 
-// ── overlays ───────────────────────────────────────────────────────────
+// ── vibration helpers ──────────────────────────────────────────────────
+function vibScale(pfNow){
+  const age = (pfNow - lastStrokePfNow) / 1000;
+  if(age > 0.7) return 1;
+  const env = Math.exp(-age * 9);
+  const osc = (1 + Math.cos(age * 24)) / 2;
+  return 1 + env * 0.95 * osc;
+}
+
+function vibGlow(pfNow){
+  const age = (pfNow - lastOnsetPfNow) / 1000;
+  if(age > 0.6) return 0;
+  const env = Math.exp(-age * 8);
+  const osc = (1 + Math.cos(age * 28)) / 2;
+  return env * osc;
+}
+
+// ── arrow FX on hand ──────────────────────────────────────────────────
 function drawArrowFx(){
   if(!arrowFx) return;
-  const age = (performance.now()-arrowFx.born)/500;
+  const age = (performance.now() - arrowFx.born) / 750;
   if(age >= 1){ arrowFx=null; return; }
-  const alpha = 1-age;
-  const col = arrowFx.dir==='down' ? '232,71,42' : '34,119,221';
-  const size = 80 + age*30;
+
+  const env = Math.exp(-age * 7);
+  const osc = (1 + Math.cos(age * 22)) / 2;
+  const vib = 1 + env * 0.7 * osc;
+  const alpha = Math.pow(1 - age, 1.4);
+  const isDown = arrowFx.dir === 'down';
+  const rgb = isDown ? RGB_DOWN : RGB_UP;
+  const size = 90 * vib;
+  const {x, y} = arrowFx;
+  const d = isDown ? 1 : -1;
+
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.strokeStyle = `rgb(${col})`;
-  ctx.fillStyle   = `rgb(${col})`;
-  ctx.lineWidth = 10;
-  const {x,y} = arrowFx;
-  const d = arrowFx.dir==='down' ? 1 : -1;
+  ctx.lineCap = 'round';
+
+  ctx.shadowColor = `rgb(${rgb})`;
+  ctx.shadowBlur  = 40 * env + 12;
+  ctx.strokeStyle = `rgba(${rgb},0.35)`;
+  ctx.lineWidth   = 22 * vib;
   ctx.beginPath();
   ctx.moveTo(x, y - d*size/2);
   ctx.lineTo(x, y + d*size/2);
   ctx.stroke();
+
+  ctx.shadowBlur  = 18;
+  ctx.strokeStyle = `rgb(${rgb})`;
+  ctx.lineWidth   = 7;
+  ctx.beginPath();
+  ctx.moveTo(x, y - d*size/2);
+  ctx.lineTo(x, y + d*size/2);
+  ctx.stroke();
+
+  ctx.fillStyle  = `rgb(${rgb})`;
+  ctx.shadowBlur = 22;
   ctx.beginPath();
   ctx.moveTo(x,           y + d*size/2);
   ctx.lineTo(x - size/3,  y + d*size/2 - d*size/3);
@@ -371,14 +397,14 @@ function drawArrowFx(){
   ctx.restore();
 }
 
+// ── top metric chips ──────────────────────────────────────────────────
 function drawTopChips(center){
-  const W = cv.width;
-  const speed = (Math.abs(velEMA)*1000).toFixed(0);
-  const dir = !center ? '—' : velEMA >= 0 ? 'DOWN ↓' : 'UP ↑';
-  const dirCol = !center ? '#888' : velEMA >= 0 ? '#E8472A' : '#2277DD';
-  const chips = [
+  const isDown = velEMA >= 0;
+  const dir    = !center ? '—' : isDown ? 'DOWN ↓' : 'UP ↑';
+  const dirCol = !center ? '#888' : isDown ? CLR_DOWN : CLR_UP;
+  const chips  = [
     ['DIRECTION', dir, dirCol],
-    ['SPEED', center ? speed : '—', '#fff'],
+    ['SPEED',  center ? (Math.abs(velEMA)*1000).toFixed(0) : '—', '#fff'],
     ['STROKES', String(strokes.length), '#fff'],
     ['DOWN/UP', `${downCount}/${upCount}`, '#fff'],
   ];
@@ -386,15 +412,17 @@ function drawTopChips(center){
   let x = 12;
   chips.forEach(([lbl,val,col])=>{
     const w = 106;
-    ctx.fillStyle = 'rgba(0,0,0,.62)';
-    roundRect(x, 10, w, 44, 6);
-    ctx.fill();
-    ctx.fillStyle = '#E8472A';
+    ctx.fillStyle = 'rgba(0,0,0,.72)';
+    roundRect(x, 10, w, 44, 6); ctx.fill();
+    ctx.fillStyle = '#777';
     ctx.font = '800 8px -apple-system,sans-serif';
     ctx.fillText(lbl, x+8, 24);
-    ctx.fillStyle = col;
+    ctx.shadowColor = col !== '#fff' ? col : 'transparent';
+    ctx.shadowBlur  = col !== '#fff' ? 8 : 0;
+    ctx.fillStyle   = col;
     ctx.font = '800 17px -apple-system,sans-serif';
     ctx.fillText(val, x+8, 42);
+    ctx.shadowBlur = 0;
     x += w + 6;
   });
   ctx.restore();
@@ -410,138 +438,189 @@ function roundRect(x,y,w,h,r){
   ctx.closePath();
 }
 
-// ── bottom overlay: flux chart + pattern ──────────────────────────────
-function drawBottomOverlay(){
+// ── slim flux strip at canvas bottom ─────────────────────────────────
+const STRIP_H_FRAC = 0.14;   // 14% of canvas height
+
+function drawFluxStrip(){
   const W = cv.width, H = cv.height;
-  const OH = Math.floor(H * 0.25);   // overlay height = 25% of video
-  const OY = H - OH;
+  const SH = Math.floor(H * STRIP_H_FRAC);
+  const SY = H - SH;
 
-  // dark background
-  ctx.fillStyle = 'rgba(0,0,0,.65)';
-  ctx.fillRect(0, OY, W, OH);
+  ctx.fillStyle = 'rgba(0,0,0,.78)';
+  ctx.fillRect(0, SY, W, SH);
 
-  const CHART_H = Math.floor(OH * 0.50);
-  const PAT_H   = OH - CHART_H;
-
-  // separator
-  ctx.strokeStyle = '#1e1e1e';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, OY+CHART_H); ctx.lineTo(W, OY+CHART_H); ctx.stroke();
-
-  drawFluxChart(0, OY+2, W, CHART_H-4);
-  drawPatternOnCanvas(0, OY+CHART_H, W, PAT_H);
-}
-
-function drawFluxChart(x,y,w,h){
   const n = fluxHist.length;
-  if(n < 2) return;
+  if(n < 2){ return; }
 
-  // compute adaptive threshold for drawing
-  const vals = fluxHist.map(e=>e.v);
-  const mean = vals.reduce((s,v)=>s+v,0)/vals.length;
-  const std  = vals.length > 2
+  const vals   = fluxHist.map(e=>e.v);
+  const mean   = vals.reduce((s,v)=>s+v,0)/vals.length;
+  const std    = vals.length > 2
     ? Math.sqrt(vals.reduce((s,v)=>s+(v-mean)**2,0)/vals.length) : 1;
-  const sens = +$('sens').value;
-  const k = 2.6 - (sens-1)*(2.6-0.6)/9;
+  const sens   = +$('sens').value;
+  const k      = 2.6 - (sens-1)*(2.6-0.6)/9;
   const thresh = mean + k*std;
-  const maxV = Math.max(...vals, thresh*1.1, 1);
+  const maxV   = Math.max(...vals, thresh*1.1, 1);
 
   ctx.save();
-  const BAR_W = w / FLUX_MAX;
-
-  // fill gaps on left when history < FLUX_MAX
+  const BAR_W = W / FLUX_MAX;
+  const pad = 3;
   const offset = FLUX_MAX - n;
 
   fluxHist.forEach((entry, i)=>{
-    const bh = (entry.v / maxV) * h;
-    const bx = x + (offset + i) * BAR_W;
-    const by = y + h - bh;
+    const bh = (entry.v / maxV) * (SH - pad*2);
+    const bx = (offset + i) * BAR_W;
+    const by = SY + SH - pad - bh;
     if(entry.onset){
-      ctx.fillStyle = '#E8472A';
+      ctx.fillStyle   = CLR_DOWN;
+      ctx.shadowColor = CLR_DOWN;
+      ctx.shadowBlur  = 12;
     } else {
+      ctx.shadowBlur  = 0;
       const intensity = Math.min(1, entry.v/Math.max(thresh,1));
-      ctx.fillStyle = `rgba(34,119,221,${0.15 + intensity*0.5})`;
+      ctx.fillStyle = `rgba(160,80,255,${0.12 + intensity*0.55})`;
     }
     ctx.fillRect(bx, by, Math.max(BAR_W-1,1), bh);
   });
+  ctx.shadowBlur = 0;
 
   // threshold line
-  const ty = y + h - (thresh/maxV)*h;
-  ctx.strokeStyle = 'rgba(232,71,42,0.5)';
+  const ty = SY + SH - pad - (thresh/maxV)*(SH - pad*2);
+  ctx.strokeStyle = `rgba(${RGB_DOWN},0.4)`;
   ctx.lineWidth = 1;
   ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(x,ty); ctx.lineTo(x+w,ty); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,ty); ctx.lineTo(W,ty); ctx.stroke();
   ctx.setLineDash([]);
 
-  // label
-  ctx.fillStyle = '#666';
-  ctx.font = '700 9px -apple-system,sans-serif';
-  ctx.fillText('AUDIO FLUX', x+6, y+12);
-  ctx.fillStyle = 'rgba(232,71,42,0.7)';
-  ctx.fillText('— threshold', x+6, ty-3);
+  // onset pulse glow border
+  const pulse = vibGlow(performance.now());
+  if(pulse > 0.01){
+    ctx.strokeStyle = `rgba(${RGB_DOWN},${pulse * 0.85})`;
+    ctx.lineWidth   = 3;
+    ctx.shadowColor = CLR_DOWN;
+    ctx.shadowBlur  = 16 * pulse;
+    ctx.strokeRect(1, SY+1, W-2, SH-2);
+    ctx.shadowBlur = 0;
+  }
 
+  ctx.fillStyle = '#444';
+  ctx.font = '700 9px -apple-system,sans-serif';
+  ctx.fillText('AUDIO FLUX', 6, SY + 11);
   ctx.restore();
 }
 
-function drawPatternOnCanvas(x,y,w,h){
+// ── PATTERN OVERLAY — floating pill on the video ──────────────────────
+function drawPatternOverlay(){
   if(!strokes.length) return;
 
-  // show last N strokes that fit
-  const S = Math.min(32, strokes.length);
+  const W = cv.width, H = cv.height;
+  const STRIP_H = Math.floor(H * STRIP_H_FRAC);
+
+  const S      = Math.min(24, strokes.length);
   const recent = strokes.slice(-S);
 
-  // font size to fit S symbols + group spaces in width w
-  const groups = Math.ceil(S/4);
-  const totalSlots = S + groups - 1;  // symbols + group gaps
-  const rawFontSize = (w * 0.85) / (totalSlots * 0.7);
-  const fontSize = Math.max(18, Math.min(48, rawFontSize));
+  // font size: fill ~85% of canvas width across all symbols + group gaps
+  const groups      = Math.ceil(S / 4);
+  const totalSlots  = S + groups - 1;
+  const rawFs = (W * 0.85) / (totalSlots * 0.72);
+  const fontSize    = Math.max(28, Math.min(80, rawFs));
 
   ctx.save();
   ctx.font = `900 ${fontSize}px -apple-system,monospace`;
   ctx.textBaseline = 'middle';
 
-  // measure total width to center
-  const cy = y + h/2 + 2;
+  // measure total symbol run width
   let totalW = 0;
-  recent.forEach((s,i)=>{
-    totalW += ctx.measureText(s.dir==='down'?'↓':'↑').width;
-    if(i>0 && i%4===0) totalW += fontSize*0.4;
-    if(i<S-1) totalW += fontSize*0.08;
+  recent.forEach((s, i) => {
+    totalW += ctx.measureText(s.dir==='down' ? '↓' : '↑').width;
+    if(i > 0 && i % 4 === 0) totalW += fontSize * 0.4;   // group gap
+    if(i < S - 1)             totalW += fontSize * 0.1;   // letter gap
   });
-  let cx = x + (w - totalW)/2;
 
-  recent.forEach((s,i)=>{
-    if(i>0 && i%4===0) cx += fontSize*0.4;
-    const sym = s.dir==='down' ? '↓' : '↑';
-    // glow
-    ctx.shadowColor = s.dir==='down' ? '#E8472A' : '#2277DD';
-    ctx.shadowBlur  = 12;
-    ctx.fillStyle   = s.dir==='down' ? '#E8472A' : '#4499FF';
-    ctx.fillText(sym, cx, cy);
-    cx += ctx.measureText(sym).width + fontSize*0.08;
+  const pillPadX = 20, pillPadY = 10;
+  const pillW = totalW + pillPadX * 2;
+  const pillH = fontSize * 1.55;
+  const pillX = (W - pillW) / 2;
+  // position: bottom of video area, just above the flux strip
+  const pillY = H - STRIP_H - pillH - 14;
+
+  // pill background with blur effect
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+  ctx.fill();
+
+  // subtle pill border that pulses on onset
+  const pulse = vibGlow(performance.now());
+  if(pulse > 0.02){
+    ctx.strokeStyle = `rgba(${RGB_DOWN},${pulse * 0.6})`;
+    ctx.lineWidth   = 2;
+    ctx.shadowColor = CLR_DOWN;
+    ctx.shadowBlur  = 12 * pulse;
+    roundRect(pillX, pillY, pillW, pillH, pillH / 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  const now = performance.now();
+  const vib = vibScale(now);
+  const cy  = pillY + pillH / 2;
+  let cx    = pillX + pillPadX;
+
+  recent.forEach((s, i) => {
+    if(i > 0 && i % 4 === 0) cx += fontSize * 0.4;
+
+    const sym    = s.dir === 'down' ? '↓' : '↑';
+    const isLast = i === recent.length - 1;
+    const isDown = s.dir === 'down';
+    const col    = isDown ? CLR_DOWN : CLR_UP;
+    const symW   = ctx.measureText(sym).width;
+
+    if(isLast && vib > 1.008){
+      // vibrating, scaled-up last symbol
+      ctx.save();
+      ctx.translate(cx + symW / 2, cy);
+      ctx.scale(vib, vib);
+      const glow = 28 + (vib - 1) * 80;
+      ctx.shadowColor = col;
+      ctx.fillStyle   = col;
+      ctx.shadowBlur  = glow * 1.8;
+      ctx.fillText(sym, -symW / 2, 0);
+      ctx.shadowBlur  = glow * 0.5;
+      ctx.fillText(sym, -symW / 2, 0);
+      ctx.restore();
+    } else {
+      ctx.shadowColor = col;
+      ctx.shadowBlur  = isLast ? 20 : 10;
+      ctx.fillStyle   = col;
+      ctx.fillText(sym, cx, cy);
+    }
+
+    cx += symW + fontSize * 0.1;
   });
   ctx.restore();
 
-  // BPM + count
+  // BPM label to the right of pill
   const downs = strokes.filter(s=>s.dir==='down').map(s=>s.t);
-  let bpmTxt = '– BPM';
+  let bpmTxt = '';
   if(downs.length >= 3){
     const gaps = [];
-    for(let i=1;i<downs.length;i++){const g=downs[i]-downs[i-1];if(g>.15&&g<2)gaps.push(g);}
+    for(let i=1;i<downs.length;i++){
+      const g=downs[i]-downs[i-1]; if(g>.15&&g<2) gaps.push(g);
+    }
     if(gaps.length){
       gaps.sort((a,b)=>a-b);
       bpmTxt = Math.round(60/gaps[Math.floor(gaps.length/2)]) + ' BPM';
     }
   }
-  ctx.save();
-  ctx.font = '700 11px -apple-system,sans-serif';
-  ctx.fillStyle = '#888';
-  ctx.textBaseline = 'bottom';
-  ctx.fillText(`↓${downCount} ↑${upCount}  ·  ${bpmTxt}`, x+8, y+h-4);
-  ctx.restore();
+  if(bpmTxt){
+    ctx.save();
+    ctx.font = `700 ${Math.max(12, fontSize * 0.28)}px -apple-system,sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#666';
+    ctx.fillText(bpmTxt, pillX + pillW + 10, pillY + pillH / 2);
+    ctx.restore();
+  }
 }
 
-// ── init ───────────────────────────────────────────────────────────────
 initModel();
 </script>
 </body>
