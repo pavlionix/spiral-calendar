@@ -81,6 +81,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
 .btn-primary:hover{opacity:.88}
 .btn-primary:disabled{opacity:.4;cursor:not-allowed}
 
+/* ── sensitivity slider ──────────────────────────────────────────── */
+.sens-row{display:flex;align-items:center;gap:10px;margin-top:4px}
+.sens-row input[type=range]{flex:1;accent-color:var(--orange);height:3px;cursor:pointer}
+.sens-val{font-size:12px;font-weight:700;color:#fff;min-width:18px;text-align:right}
+
 /* ── source tabs ─────────────────────────────────────────────────── */
 .src-tabs{display:flex;margin-bottom:16px;border:1px solid #2e2e2e;border-radius:6px;overflow:hidden}
 .src-tab{flex:1;padding:9px 0;background:transparent;border:none;color:#555;
@@ -115,8 +120,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
 
 /* ── video panel ──────────────────────────────────────────────── */
 .vpanel{position:relative;background:#000;display:flex;align-items:center;
-  justify-content:center;overflow:hidden}
-#frame-canvas{width:100%;height:auto;display:block;max-height:500px;object-fit:contain}
+  justify-content:center;overflow:hidden;min-height:300px}
+#frame-canvas{max-width:100%;max-height:520px;width:auto;height:auto;display:block;object-fit:contain}
 .ftime{position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,.7);
   padding:3px 10px;border-radius:4px;font-size:11px;color:#ccc;
   font-variant-numeric:tabular-nums;letter-spacing:.05em;font-weight:600}
@@ -225,7 +230,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
       </div>
       <div class="fg">
         <label>ROI — x1,y1,x2,y2 fractions (strumming hand region)</label>
-        <input type="text" id="froi" value="0.4,0.2,1.0,1.0">
+        <input type="text" id="froi" value="0.0,0.2,1.0,1.0">
+      </div>
+      <div class="fg">
+        <label>Sensitivity (higher = detect more strokes)</label>
+        <div class="sens-row">
+          <input type="range" id="fsens" min="1" max="10" value="5"
+            oninput="$('sens-display').textContent=this.value">
+          <span class="sens-val" id="sens-display">5</span>
+        </div>
       </div>
       <button type="submit" class="btn-primary" id="abtn">Analyze Pattern</button>
     </form>
@@ -362,6 +375,7 @@ $('uform').addEventListener('submit', async e => {
   fd.append('start',    $('fstart').value);
   fd.append('duration', $('fdur').value);
   fd.append('roi',      $('froi').value);
+  fd.append('sens',     $('fsens').value);
   const bpmv = $('fbpm').value;
   if(bpmv) fd.append('bpm', bpmv);
 
@@ -672,10 +686,13 @@ def analyze():
         duration = float(request.form.get("duration", 16))
         bpm_in   = request.form.get("bpm")
         bpm_val  = float(bpm_in) if bpm_in else None
-        roi_str  = request.form.get("roi", "0.4,0.2,1.0,1.0")
+        roi_str  = request.form.get("roi", "0.0,0.2,1.0,1.0")
         roi      = tuple(float(x) for x in roi_str.split(","))
         if len(roi) != 4:
             raise ValueError("ROI must be 4 values")
+        # sensitivity 1-10 → threshold multiplier 3.5 (low sens) … 0.8 (high sens)
+        sens     = max(1, min(10, int(request.form.get("sens", 5))))
+        thresh_k = 3.5 - (sens - 1) * (3.5 - 0.8) / 9
     except Exception as e:
         return jsonify(error=f"Bad parameters: {e}"), 400
 
@@ -706,7 +723,7 @@ def analyze():
         times, velocities, fps = vertical_motion_signal(
             video_path, start, duration, roi
         )
-        strokes = detect_strokes(times, velocities, fps)
+        strokes = detect_strokes(times, velocities, fps, thresh_k=thresh_k)
         spb     = estimate_beat(strokes, bpm_val)
         est_bpm = max(1, round(60.0 / spb))
 

@@ -156,11 +156,11 @@ def vertical_motion_signal(video_path, start, duration, roi, debug_dir=None):
     return np.array(times), np.array(velocities), fps
 
 
-def detect_strokes(times, velocities, fps):
+def detect_strokes(times, velocities, fps, thresh_k: float = 2.0):
     """Turn the velocity signal into a list of discrete strokes.
 
-    A stroke is a contiguous run of same-sign velocity whose peak exceeds an
-    adaptive threshold; its time is the moment of peak velocity.
+    thresh_k controls sensitivity: lower = more strokes detected (default 2.0).
+    The web UI exposes this as a 1-10 slider mapped to ~0.8-3.5.
     """
     if len(velocities) == 0:
         return []
@@ -171,7 +171,7 @@ def detect_strokes(times, velocities, fps):
     v = np.convolve(velocities, kernel, mode="same")
 
     noise = float(np.median(np.abs(v))) or 1e-6
-    threshold = max(noise * 2.5, float(np.abs(v).max()) * 0.15)
+    threshold = max(noise * thresh_k, float(np.abs(v).max()) * 0.10)
 
     strokes = []
     i = 0
