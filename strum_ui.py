@@ -81,6 +81,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
 .btn-primary:hover{opacity:.88}
 .btn-primary:disabled{opacity:.4;cursor:not-allowed}
 
+/* ── source tabs ─────────────────────────────────────────────────── */
+.src-tabs{display:flex;margin-bottom:16px;border:1px solid #2e2e2e;border-radius:6px;overflow:hidden}
+.src-tab{flex:1;padding:9px 0;background:transparent;border:none;color:#555;
+  font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  cursor:pointer;transition:background .15s,color .15s}
+.src-tab.active{background:var(--orange);color:#fff}
+
 /* ── Processing ─────────────────────────────────────────────────── */
 #processing-screen{flex:1;display:none;flex-direction:column;align-items:center;
   justify-content:center;gap:16px}
@@ -196,9 +203,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-seri
 
   <div class="form-card">
     <form id="uform">
-      <div class="fg">
+      <div class="src-tabs">
+        <button type="button" class="src-tab active" id="tab-file" onclick="switchTab('file')">Upload File</button>
+        <button type="button" class="src-tab" id="tab-url" onclick="switchTab('url')">YouTube URL</button>
+      </div>
+      <div class="fg" id="src-file">
         <label>Video File (mp4, mov, webm)</label>
-        <input type="file" id="vfile" accept="video/*" required>
+        <input type="file" id="vfile" accept="video/*">
+      </div>
+      <div class="fg" id="src-url" style="display:none">
+        <label>YouTube URL</label>
+        <input type="text" id="vurl" placeholder="https://youtu.be/...">
       </div>
       <div class="row3">
         <div class="fg"><label>Start (s)</label>
@@ -320,14 +335,30 @@ function show(name){
   $('results-screen').style.display    = name==='results'    ? 'flex' : 'none';
 }
 
+// ── source tab switcher ───────────────────────────────────────────
+let srcMode = 'file';
+function switchTab(mode){
+  srcMode = mode;
+  $('tab-file').classList.toggle('active', mode==='file');
+  $('tab-url').classList.toggle('active', mode==='url');
+  $('src-file').style.display = mode==='file' ? '' : 'none';
+  $('src-url').style.display  = mode==='url'  ? '' : 'none';
+}
+
 // ── upload ────────────────────────────────────────────────────────
 $('uform').addEventListener('submit', async e => {
   e.preventDefault();
-  const file = $('vfile').files[0];
-  if(!file) return;
 
   const fd = new FormData();
-  fd.append('video', file);
+  if(srcMode === 'file'){
+    const file = $('vfile').files[0];
+    if(!file){ alert('Please select a video file'); return; }
+    fd.append('video', file);
+  } else {
+    const url = $('vurl').value.trim();
+    if(!url){ alert('Please enter a YouTube URL'); return; }
+    fd.append('url', url);
+  }
   fd.append('start',    $('fstart').value);
   fd.append('duration', $('fdur').value);
   fd.append('roi',      $('froi').value);
@@ -335,7 +366,7 @@ $('uform').addEventListener('submit', async e => {
   if(bpmv) fd.append('bpm', bpmv);
 
   show('processing');
-  $('proc-label').textContent = 'Uploading';
+  $('proc-label').textContent = srcMode === 'url' ? 'Downloading…' : 'Uploading…';
 
   try{
     const r = await fetch('/analyze', {method:'POST', body:fd});
@@ -636,10 +667,6 @@ def index():
 
 @app.post("/analyze")
 def analyze():
-    if "video" not in request.files or request.files["video"].filename == "":
-        return jsonify(error="No video file"), 400
-
-    f = request.files["video"]
     try:
         start    = float(request.form.get("start", 10))
         duration = float(request.form.get("duration", 16))
@@ -652,10 +679,27 @@ def analyze():
     except Exception as e:
         return jsonify(error=f"Bad parameters: {e}"), 400
 
-    suffix = Path(f.filename).suffix or ".mp4"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        f.save(tmp.name)
-        video_path = tmp.name
+    url_src = request.form.get("url", "").strip()
+    tmpdir_obj = None
+    video_path = None
+
+    try:
+        if url_src:
+            tmpdir_obj = tempfile.TemporaryDirectory()
+            video_path = resolve_source(url_src, tmpdir_obj.name)
+        else:
+            if "video" not in request.files or request.files["video"].filename == "":
+                return jsonify(error="No video file or URL provided"), 400
+            f = request.files["video"]
+            suffix = Path(f.filename).suffix or ".mp4"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                f.save(tmp.name)
+                video_path = tmp.name
+
+    except Exception as e:
+        if tmpdir_obj:
+            tmpdir_obj.cleanup()
+        return jsonify(error=f"Could not load video: {e}"), 500
 
     try:
         # Optical flow analysis
@@ -696,10 +740,13 @@ def analyze():
     except Exception as e:
         return jsonify(error=str(e)), 500
     finally:
-        try:
-            os.unlink(video_path)
-        except OSError:
-            pass
+        if tmpdir_obj:
+            tmpdir_obj.cleanup()
+        elif video_path:
+            try:
+                os.unlink(video_path)
+            except OSError:
+                pass
 
 
 # ── main ─────────────────────────────────────────────────────────────────
