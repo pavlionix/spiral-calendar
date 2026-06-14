@@ -48,6 +48,30 @@ video{display:none}
 
 #pauseIcon{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
   font-size:80px;color:rgba(255,255,255,.55);pointer-events:none}
+
+/* auto-tune results panel */
+.tune-panel{position:absolute;top:12px;right:12px;width:280px;background:rgba(10,10,12,.94);
+  border:1px solid #262626;border-radius:10px;z-index:6;display:none;overflow:hidden;
+  box-shadow:0 8px 30px rgba(0,0,0,.6)}
+.tune-panel.show{display:block}
+.tune-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;
+  border-bottom:1px solid #1e1e1e}
+.tune-head .t{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--green)}
+.tune-head .x{background:none;border:none;color:#888;font-size:18px;cursor:pointer;line-height:1}
+.tune-sub{padding:8px 12px;font-size:11px;color:#aaa;border-bottom:1px solid #1e1e1e;line-height:1.5}
+.tune-sub b{color:#fff}
+.tune-rows{max-height:300px;overflow-y:auto}
+.tune-row{display:grid;grid-template-columns:34px 1fr 1fr 46px;gap:6px;align-items:center;
+  padding:7px 12px;font-size:11px;cursor:pointer;border-bottom:1px solid #161616}
+.tune-row:hover{background:#161616}
+.tune-row.best{background:rgba(0,255,136,.10)}
+.tune-row .s{font-weight:800}
+.tune-row .bar{height:6px;border-radius:3px;background:#222;overflow:hidden}
+.tune-row .bar > i{display:block;height:100%;background:var(--green)}
+.tune-row .num{color:#aaa;text-align:right;font-variant-numeric:tabular-nums}
+.tune-legend{display:grid;grid-template-columns:34px 1fr 1fr 46px;gap:6px;padding:6px 12px;
+  font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#666;
+  border-bottom:1px solid #1e1e1e}
 </style>
 </head>
 <body>
@@ -76,6 +100,7 @@ video{display:none}
     </div>
   </div>
   <button class="btn ghost" id="webcamBtn">Webcam</button>
+  <button class="btn ghost" id="tuneBtn" disabled>Auto-tune</button>
   <button class="btn" id="playBtn" disabled>Play</button>
   <button class="btn ghost" id="resetBtn">Reset</button>
 </div>
@@ -88,6 +113,16 @@ video{display:none}
     <div class="hint" id="statusHint">Downloads ~10 MB from CDN on first run. Needs internet.</div>
   </div>
   <div id="pauseIcon">⏸</div>
+
+  <div class="tune-panel" id="tunePanel">
+    <div class="tune-head">
+      <span class="t">Auto-tune · Sensitivity</span>
+      <button class="x" id="tuneClose">×</button>
+    </div>
+    <div class="tune-sub" id="tuneSub"></div>
+    <div class="tune-legend"><span>SENS</span><span>REGULARITY</span><span>BPM</span><span>HITS</span></div>
+    <div class="tune-rows" id="tuneRows"></div>
+  </div>
 </div>
 
 <video id="vid" playsinline preload="auto" crossorigin="anonymous"></video>
@@ -100,7 +135,7 @@ import {
   palmCenter, classifyDir, spectralFlux, audioOnsetDecision,
   sensToK, sensToMinMag, vibScale, vibGlow,
   estimateBPM, meanStd, HandTracker,
-  calcCanvasSize, uiScale,
+  calcCanvasSize, uiScale, sweepSensitivity,
 } from "./strum_core.js";
 
 const $ = id => document.getElementById(id);
@@ -137,6 +172,13 @@ let downCount = 0, upCount = 0;
 
 let arrowFx = null;
 
+// auto-tune: record one pass of {t, flux, velEMA}, then sweep all
+// sensitivities offline and pick the most regular pattern.
+let tuneMode = false;
+let tuneFrames = [];
+let lastSignal = 0;        // flux (audio) or scaled hand speed (motion)
+let prevLoop = true;
+
 // MediaPipe frame-skip: run detection every other frame,
 // redraw the previous landmarks on the frames in between.
 // Halves GPU/CPU cost with no visible quality loss at 30 fps.
@@ -161,6 +203,7 @@ async function initModel(){
     drawer = new DrawingUtils(ctx);
     hideStatus();
     $('playBtn').disabled = !vid.src;
+    $('tuneBtn').disabled = !vid.src;
   }catch(err){
     showStatus("Model failed to load.", `${err.message} — check internet and reload.`);
   }
@@ -181,7 +224,12 @@ $('vfile').addEventListener('change', e=>{
   vid.src = URL.createObjectURL(f);
   vid.muted = false; vid.loop = true;
   resetState();
-  vid.onloadeddata = ()=>{ sizeCanvas(); $('playBtn').disabled=!handLandmarker; drawStill(); };
+  vid.onloadeddata = ()=>{
+    sizeCanvas();
+    $('playBtn').disabled = !handLandmarker;
+    $('tuneBtn').disabled = !handLandmarker;
+    drawStill();
+  };
 });
 
 $('webcamBtn').addEventListener('click', async ()=>{
@@ -213,6 +261,76 @@ function setPauseUI(paused){
 }
 
 $('resetBtn').addEventListener('click', ()=>{ resetState(); if(!isPaused) drawStill(); });
+
+// ── auto-tune ─────────────────────────────────────────────────────────────
+$('tuneBtn').addEventListener('click', startTune);
+$('tuneClose').addEventListener('click', ()=> $('tunePanel').classList.remove('show'));
+vid.addEventListener('ended', ()=>{ if(tuneMode) finishTune(); });
+
+function startTune(){
+  if(!vid.src && !vid.srcObject) return;
+  if(vid.srcObject){ alert('Auto-tune needs a video file (not webcam).'); return; }
+  $('tunePanel').classList.remove('show');
+  resetState();
+  tuneMode = true; tuneFrames = [];
+  prevLoop = vid.loop; vid.loop = false;
+  setupAudio();
+  $('tuneBtn').textContent = 'Tuning…';
+  $('tuneBtn').disabled = true;
+  vid.currentTime = 0;
+  vid.play(); start(); setPauseUI(false);
+}
+
+function finishTune(){
+  tuneMode = false;
+  vid.loop = prevLoop;
+  stop(); vid.pause(); setPauseUI(true);
+  $('tuneBtn').textContent = 'Auto-tune';
+  $('tuneBtn').disabled = false;
+
+  if(tuneFrames.length < 10){
+    alert('Auto-tune captured too few frames. Make sure the clip has sound and try again.');
+    return;
+  }
+  const { best, all } = sweepSensitivity(tuneFrames, {
+    minFlux: 3, refractory: REFRACTORY, histLen: FLUX_MAX,
+  });
+  applyTuneResult(best);
+  renderTunePanel(best, all);
+}
+
+// apply a swept result: set the slider, rebuild strokes, repaint once
+function applyTuneResult(r){
+  $('sens').value = r.sens;
+  $('sensv').textContent = r.sens;
+  strokes = r.strokes.map(s => ({...s}));
+  downCount = strokes.filter(s=>s.dir==='down').length;
+  upCount   = strokes.length - downCount;
+  drawStill();
+  drawTopChips(); drawFluxStrip(); drawPatternOverlay();
+}
+
+function renderTunePanel(best, all){
+  const fmtBpm = b => b ? `${b}` : '–';
+  $('tuneSub').innerHTML =
+    `Best: <b>sens ${best.sens}</b> · <b>${best.nStrokes}</b> strokes · ` +
+    `<b>${fmtBpm(best.bpm)}</b> BPM · ${(best.regularity*100|0)}% regular. ` +
+    `Click any row to compare.`;
+  const rows = $('tuneRows');
+  rows.innerHTML = '';
+  all.forEach(r=>{
+    const div = document.createElement('div');
+    div.className = 'tune-row' + (r.sens===best.sens ? ' best':'');
+    div.innerHTML =
+      `<span class="s">${r.sens}</span>`+
+      `<span class="bar"><i style="width:${(r.regularity*100)|0}%"></i></span>`+
+      `<span class="num">${fmtBpm(r.bpm)}</span>`+
+      `<span class="num">${r.nStrokes}</span>`;
+    div.addEventListener('click', ()=> applyTuneResult(r));
+    rows.appendChild(div);
+  });
+  $('tunePanel').classList.add('show');
+}
 
 function sizeCanvas(){
   // Cap the longer dimension at 1280 px so MediaPipe stays fast on
@@ -332,6 +450,11 @@ function processFrame(tMs){
     arrowFx = { x: center.x, y: center.y, dir, born: performance.now() };
   }
 
+  // record this frame for offline sensitivity sweep
+  if(tuneMode){
+    tuneFrames.push({ t, flux: lastSignal, velEMA });
+  }
+
   // overlays
   drawArrowFx();
   drawTopChips();
@@ -364,6 +487,7 @@ function detectAudioOnset(t){
   analyser.getFloatFrequencyData(freq);
   const { flux, nextPrev } = spectralFlux(freq, freqPrev);
   freqPrev = nextPrev;
+  lastSignal = flux;
 
   const k = sensToK(+$('sens').value);
   const isOnset = audioOnsetDecision({
@@ -378,6 +502,7 @@ function detectAudioOnset(t){
 
 // ── motion onset ─────────────────────────────────────────────────────────
 function detectMotionOnset(t){
+  lastSignal = handSpeed * 200;
   fluxHist.push({v: handSpeed * 200, onset: false});
   if(fluxHist.length > FLUX_MAX) fluxHist.shift();
   const minMag = sensToMinMag(+$('sens').value);

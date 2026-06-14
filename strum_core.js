@@ -104,6 +104,88 @@ export function estimateBPM(downTimes) {
   return Math.round(60 / median);
 }
 
+// ── sensitivity sweep (offline auto-tune) ──────────────────────────────
+// The browser records one pass of per-frame {t, flux, velEMA}. These pure
+// functions then replay the onset decision at every sensitivity level and
+// score the resulting pattern, so the app can auto-pick the best setting.
+
+const median = arr => {
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+};
+
+// Re-run the adaptive-threshold audio onset detector over a recorded frame
+// series for a fixed threshold multiplier k. Mirrors the live detector's
+// ordering: decide using history *excluding* the current frame, then append.
+export function replayAudioOnsets(frames, {
+  k, minFlux = 3, refractory = 0.12, histLen = 120,
+} = {}) {
+  const strokes = [];
+  const hist = [];
+  let lastOnsetAt = -Infinity;
+  for (const fr of frames) {
+    const isOnset = audioOnsetDecision({
+      flux: fr.flux, histVals: hist, k, minFlux,
+      dtSinceLast: fr.t - lastOnsetAt, refractory,
+    });
+    if (isOnset) {
+      strokes.push({ t: fr.t, dir: classifyDir(fr.velEMA) });
+      lastOnsetAt = fr.t;
+    }
+    hist.push(fr.flux);
+    if (hist.length > histLen) hist.shift();
+  }
+  return strokes;
+}
+
+// How well a set of event times falls on a regular grid (0..1). Gaps that
+// are near-integer multiples of the dominant gap score high; jittered or
+// random gaps score low. This is the "precision" proxy for a strum pattern.
+export function patternRegularity(times) {
+  if (times.length < 4) return 0;
+  const gaps = [];
+  for (let i = 1; i < times.length; i++) gaps.push(times[i] - times[i - 1]);
+  const base = median(gaps);
+  if (base <= 0) return 0;
+  let acc = 0;
+  for (const g of gaps) {
+    const r = g / base;
+    acc += Math.min(Math.abs(r - Math.round(r)), 0.5);
+  }
+  const meanRes = acc / gaps.length;
+  return Math.max(0, Math.min(1, 1 - 2 * meanRes));
+}
+
+// Composite score for a stroke list: on-grid regularity, gated by a minimum
+// stroke count so an over-strict setting that catches only 1–2 strokes can't
+// win on trivially-perfect regularity.
+export function patternScore(strokes, { minStrokes = 6 } = {}) {
+  const times = strokes.map(s => (typeof s === 'number' ? s : s.t));
+  const regularity = patternRegularity(times);
+  const countFactor = Math.max(0, Math.min(1, times.length / minStrokes));
+  const score = regularity * countFactor;
+  const bpm = estimateBPM(times);
+  return { score, regularity, nStrokes: times.length, bpm };
+}
+
+// Sweep all sensitivity levels over a recorded frame series and rank them.
+// Returns the ascending-by-sens list plus the auto-selected `best`
+// (highest score; ties broken toward the simpler / fewer-stroke pattern).
+export function sweepSensitivity(frames, {
+  sensLevels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  minFlux = 3, refractory = 0.12, histLen = 120, minStrokes = 6,
+} = {}) {
+  const all = sensLevels.map(sens => {
+    const k = sensToK(sens);
+    const strokes = replayAudioOnsets(frames, { k, minFlux, refractory, histLen });
+    const sc = patternScore(strokes, { minStrokes });
+    return { sens, k, strokes, ...sc };
+  });
+  const ranked = [...all].sort((a, b) =>
+    b.score - a.score || a.nStrokes - b.nStrokes);
+  return { best: ranked[0], ranked, all };
+}
+
 // ── canvas sizing ──────────────────────────────────────────────────────
 // Cap the processing canvas so that the longer dimension never exceeds
 // maxDim. This keeps MediaPipe fast on 4K/portrait files without

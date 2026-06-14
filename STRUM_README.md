@@ -39,6 +39,12 @@ Then: choose a video file → **Play**. First load downloads the MediaPipe model
 - **Source**: `Audio onsets` (default, most accurate — needs a video with sound) or
   `Motion only` (for silent clips / webcam).
 - **Sens**: how readily strums are detected (raise it if it misses strokes).
+- **Auto-tune**: plays the clip once to record per-frame audio/motion data, then
+  replays the onset detector at **every** sensitivity level offline and picks the
+  one whose pattern is the most regular (on-grid). It auto-applies the best
+  setting and shows a ranked panel — sensitivity vs. regularity / BPM / stroke
+  count — so you can click any row to compare. This is the fastest way to find
+  the most accurate, precise pattern without guessing the slider.
 - **Webcam**: analyze your own playing live.
 
 **Architecture** — the browser-free detection logic (hand selection, spectral

@@ -10,6 +10,7 @@ import {
   meanStd, palmCenter, dominantAxisDelta, classifyDir,
   spectralFlux, audioOnsetDecision, vibScale, vibGlow,
   estimateBPM, HandTracker, calcCanvasSize, uiScale,
+  replayAudioOnsets, patternRegularity, patternScore, sweepSensitivity,
 } from './strum_core.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -213,6 +214,93 @@ test('uiScale: portrait canvas (H > W) gives larger pattern font than landscape'
   assert.ok(portrait.patternFont > landscape.patternFont);
 });
 
+// ── sensitivity sweep: replay + scoring ────────────────────────────────
+// Build a synthetic recorded-frame series at 30 fps:
+//   strong onsets (flux 60) every 0.5 s  -> the true strum pattern
+//   irregular weak spikes (flux 25)       -> noise (false positives)
+//   baseline flux 3 elsewhere
+function buildFrames() {
+  const dt = 1 / 30, dur = 4.0;
+  const trueOnsets  = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5];   // 7 real strums
+  const noiseSpikes = [0.70, 1.18, 2.34];                    // irregular noise
+  const near = (t, arr) => arr.some(o => Math.abs(t - o) < dt / 2);
+  const frames = [];
+  for (let f = 0; f * dt < dur; f++) {
+    const t = f * dt;
+    let flux = 3 + (f % 3) * 0.2;                 // small deterministic ripple
+    if (near(t, trueOnsets))  flux = 60;
+    else if (near(t, noiseSpikes)) flux = 25;
+    frames.push({ t, flux, velEMA: (f % 2 ? 0.2 : -0.2) });
+  }
+  return { frames, trueOnsets, noiseSpikes };
+}
+
+test('replayAudioOnsets: detects the strong onsets, skips baseline', () => {
+  const { frames, trueOnsets } = buildFrames();
+  const strokes = replayAudioOnsets(frames, {
+    k: 2.0, minFlux: 3, refractory: 0.12, histLen: 120,
+  });
+  assert.equal(strokes.length, trueOnsets.length);
+  strokes.forEach((s, i) =>
+    assert.ok(Math.abs(s.t - trueOnsets[i]) < 0.05, `onset ${i} near ${trueOnsets[i]}`));
+});
+
+test('replayAudioOnsets: respects the refractory window', () => {
+  const dt = 1 / 30;
+  const frames = [];
+  // spike every other frame (~0.066 s apart) — below the 0.12 s refractory,
+  // so the detector must drop roughly every second spike.
+  for (let f = 0; f * dt < 1; f++)
+    frames.push({ t: f * dt, flux: (f % 2 === 0 ? 80 : 3), velEMA: 1 });
+  const strokes = replayAudioOnsets(frames, { k: 0.5, minFlux: 3, refractory: 0.12 });
+  assert.ok(strokes.length <= Math.ceil(1 / 0.12) + 1, 'rate-limited by refractory');
+  assert.ok(strokes.length >= 6, 'still fires repeatedly between refractory gaps');
+  // no two onsets closer than the refractory window
+  for (let i = 1; i < strokes.length; i++)
+    assert.ok(strokes[i].t - strokes[i - 1].t > 0.12, 'gap exceeds refractory');
+});
+
+test('patternRegularity: perfectly on-grid times score ~1', () => {
+  approx(patternRegularity([0, 0.5, 1.0, 1.5, 2.0]), 1, 1e-9);
+});
+test('patternRegularity: integer-multiple gaps still score ~1', () => {
+  // gaps of 0.5 and 1.0 are both multiples of the 0.5 grid
+  assert.ok(patternRegularity([0, 0.5, 1.0, 2.0, 2.5]) > 0.9);
+});
+test('patternRegularity: irregular times score low', () => {
+  assert.ok(patternRegularity([0, 0.5, 1.5, 1.6, 2.9]) < 0.7);
+});
+test('patternRegularity: too few points -> 0', () => {
+  assert.equal(patternRegularity([0, 0.5]), 0);
+});
+
+test('patternScore: clean pattern beats a noisy denser one', () => {
+  const clean = patternScore(
+    [0.5, 1, 1.5, 2, 2.5, 3, 3.5].map(t => ({ t, dir: 'down' })));
+  const noisy = patternScore(
+    [0.5, 0.7, 1, 1.18, 1.5, 2, 2.34, 2.5, 3, 3.5].map(t => ({ t, dir: 'down' })));
+  assert.ok(clean.score > noisy.score, `${clean.score} > ${noisy.score}`);
+  assert.equal(clean.bpm, 120);
+});
+
+test('sweepSensitivity: auto-selects the level giving the cleanest pattern', () => {
+  const { frames, trueOnsets } = buildFrames();
+  const { best, all } = sweepSensitivity(frames, {
+    minFlux: 3, refractory: 0.12, histLen: 120,
+  });
+  // best result recovers exactly the real strums
+  assert.equal(best.nStrokes, trueOnsets.length);
+  assert.ok(best.regularity > 0.9);
+  assert.equal(best.bpm, 120);
+  // every sensitivity level is reported, in ascending order
+  assert.equal(all.length, 10);
+  all.forEach((r, i) => assert.equal(r.sens, i + 1));
+  // the most-sensitive level over-triggers on the noise spikes
+  const hottest = all.find(r => r.sens === 10);
+  assert.ok(hottest.nStrokes > best.nStrokes, 'max sensitivity adds false positives');
+  assert.ok(hottest.regularity < best.regularity, 'and is less regular');
+});
+
 // ── wiring guard: strum_live.html stays in sync with the module ────────
 test('strum_live.html imports only symbols that strum_core exports', () => {
   const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
@@ -238,4 +326,9 @@ test('strum_live.html uses uiScale for chip and overlay sizing', () => {
 test('strum_live.html uses requestVideoFrameCallback for efficient loop', () => {
   const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
   assert.match(html, /requestVideoFrameCallback/, 'must use rvfc to avoid duplicate frame processing');
+});
+test('strum_live.html wires the auto-tune sweep', () => {
+  const html = readFileSync(join(HERE, 'strum_live.html'), 'utf8');
+  assert.match(html, /sweepSensitivity\(/, 'auto-tune must call sweepSensitivity');
+  assert.match(html, /id="tuneBtn"/, 'must expose an Auto-tune button');
 });
